@@ -195,7 +195,8 @@
     const ns = nextSession(s.schedule);
     let h = '<div class="card"><div class="card-head"><div><h2>' + esc(s.name) + '</h2>' +
       '<div class="small muted">' + [s.grade ? 'Grade ' + esc(s.grade) : null, esc(sessionText(s.schedule)), ns ? 'Next: ' + esc(ns.label) : null].filter(Boolean).join(' · ') + '</div></div>' +
-      '<button class="btn small" data-act="editStudent" data-id="' + s.id + '">Edit</button></div>';
+      '<button class="btn small" data-act="editStudent" data-id="' + s.id + '">Edit</button></div>' +
+      (s.notes ? '<details style="margin-bottom:10px"><summary>Private notes</summary><p class="small" style="white-space:pre-wrap;margin:6px 0 0">' + esc(s.notes) + '</p></details>' : '');
     h += '<div class="row">' + s.subjects.map(x => '<button class="btn small subj-btn" style="' + subjVar(s, x) + '" data-act="editSubject" data-id="' + x.id + '" title="Edit subject"><b>' + esc(x.name) + '</b>' +
       (subjectLine(x) ? '<span class="muted" style="font-weight:400">' + subjectLine(x) + '</span>' : '') + '</button>').join('') +
       '<button class="btn small link" data-act="addSubject">+ Add subject</button></div>';
@@ -462,7 +463,7 @@
     h += '</div>';
 
     h += '<div class="card"><h2>All scores</h2>' + (list.length ? '<table class="data"><thead><tr><th>Date</th><th>Type</th><th>What</th><th>Score</th><th></th></tr></thead><tbody>' +
-      list.slice().reverse().map(x => '<tr><td>' + fmtDate(x.date) + '</td><td>' + (x.type === 'test' ? 'Test' : 'Homework') + '</td><td>' + esc(x.label) + (multi && subjectById(s, x.subjectId) ? '<div class="small muted">' + esc(subjectById(s, x.subjectId).name) + '</div>' : '') + '</td>' +
+      list.slice().reverse().map(x => '<tr><td>' + fmtDate(x.date) + '</td><td>' + (x.type === 'test' ? 'Test / quiz' : 'Homework') + '</td><td>' + esc(x.label) + (multi && subjectById(s, x.subjectId) ? '<div class="small muted">' + esc(subjectById(s, x.subjectId).name) + '</div>' : '') + '</td>' +
         '<td>' + x.score + '/' + x.max + ' <span class="small muted">' + Math.round(pct(x)) + '%</span></td>' +
         '<td><button class="btn small link danger" data-act="delScore" data-id="' + x.id + '">Delete</button></td></tr>').join('') +
       '</tbody></table>' : '<div class="empty">No scores yet.</div>') + '</div>';
@@ -484,7 +485,12 @@
     });
     const dates = Array.from(new Set(list.map(d => d.date)));
     const step = Math.max(1, Math.ceil(dates.length / 6));
-    dates.forEach((d, i) => { if (i % step === 0 || i === dates.length - 1) svg += '<text x="' + x(d) + '" y="' + (H - 6) + '" text-anchor="middle">' + fmtDate(d) + '</text>'; });
+    let lastX = -Infinity;
+    dates.forEach((d, i) => {
+      if (!(i % step === 0 || i === dates.length - 1) || x(d) - lastX < 46) return;
+      lastX = x(d);
+      svg += '<text x="' + x(d) + '" y="' + (H - 6) + '" text-anchor="middle">' + fmtDate(d) + '</text>';
+    });
     svg += '</g>';
     const pts = [];
     [['homework', 'var(--series-1)', 'Homework'], ['test', 'var(--series-2)', 'Test']].forEach(([type, color, name]) => {
@@ -650,9 +656,52 @@
     return '<div class="card"><h2>Backup and move to another device</h2>' +
       '<p class="small muted">Your data is saved only in this browser. To use it on another phone or computer, export a backup here and import it there. Exporting now and then also protects you if the browser data gets cleared.</p>' +
       '<div class="row"><button class="btn primary" data-act="exportData">Export backup file</button>' +
-      '<label class="btn" style="margin:0;color:var(--text)">Import backup file<input type="file" id="importFile" accept="application/json,.json" class="hidden"></label></div></div>' +
+      '<label class="btn" style="margin:0;color:var(--text)">Import backup or update file<input type="file" id="importFile" accept="application/json,.json" class="hidden"></label></div>' +
+      '<p class="small muted" style="margin:10px 0 0">A backup file replaces everything on this device. An update file only adds new scores, topics and notes to one student and keeps everything else.</p></div>' +
       '<div class="card"><h2>Start over</h2><p class="small muted">Replace everything on this device with the Noah example. Export a backup first if you want to keep your data.</p>' +
       '<button class="btn danger" data-act="resetData">Reset to example data</button></div>';
+  }
+
+  /* Update files add to one student without replacing anything:
+     { type: 'tutor-dashboard-update', student, grade, notes, scores: [{ date, type, label, score, max, subject }],
+       topics: [{ name, details, group, subject }], assignments: [{ topic, title, link, done, doneDate }] } */
+  function applyUpdate(u) {
+    const s = state.students.find(x => x.name.trim().toLowerCase() === String(u.student || '').trim().toLowerCase());
+    if (!s) { toast('No student named ' + (u.student || '?') + ' on this device.'); return; }
+    const subj = name => s.subjects.find(x => x.name.toLowerCase() === String(name || '').toLowerCase()) || s.subjects[0];
+    const counts = { scores: 0, topics: 0, assignments: 0 };
+    if (u.grade && !s.grade) s.grade = u.grade;
+    if (u.notes && !(s.notes || '').includes(u.notes)) s.notes = (s.notes ? s.notes + '\n\n' : '') + u.notes;
+    (u.scores || []).forEach(x => {
+      const sub = subj(x.subject);
+      if (s.scores.some(y => y.date === x.date && y.label === x.label && y.type === x.type)) return;
+      s.scores.push({ id: uid(), subjectId: sub && sub.id, date: x.date, type: x.type === 'test' ? 'test' : 'homework', label: x.label || '', score: Number(x.score), max: Number(x.max) || 100 });
+      counts.scores++;
+    });
+    (u.topics || []).forEach(x => {
+      if (s.topics.some(t => t.name.toLowerCase() === x.name.toLowerCase())) return;
+      const sub = subj(x.subject);
+      const groups = sub ? groupsOf(s, sub.id) : s.groups;
+      const g = groups.find(gr => gr.name.toLowerCase() === String(x.group || '').toLowerCase()) || groups[0];
+      if (!g) return;
+      s.topics.push({ id: uid(), groupId: g.id, name: x.name, details: x.details || '', status: 'none', lastWorked: null, notes: x.notes || '',
+        drills: autoDrills(s, g.id, x.name), cards: [], history: [{ date: today(), status: 'none' }] });
+      counts.topics++;
+    });
+    (u.assignments || []).forEach(x => {
+      const t = s.topics.find(tp => tp.name.toLowerCase() === String(x.topic || '').toLowerCase());
+      if (!t || s.assignments.some(a => a.title === x.title)) return;
+      s.assignments.push({ id: uid(), topicId: t.id, title: x.title, link: x.link || '', due: x.due || null,
+        done: !!x.done, doneDate: x.done ? (x.doneDate || today()) : null, by: x.done ? 'tutor' : null, created: today() });
+      counts.assignments++;
+    });
+    persist();
+    state.currentId = s.id;
+    view = 'scores';
+    render();
+    const n = counts.scores + counts.topics + counts.assignments;
+    toast(n ? 'Added to ' + s.name + ': ' + counts.scores + ' scores, ' + counts.topics + ' topics, ' + counts.assignments + ' assignments.'
+      : 'Already added. Nothing new in this file for ' + s.name + '.');
   }
 
   /* ---------- Dialog forms ---------- */
@@ -711,7 +760,8 @@
     { name: 'pronoun', label: "Student's pronoun (for parent updates)", type: 'select', options: [['he', 'He'], ['she', 'She'], ['they', 'They']] },
     { name: 'day', label: 'Weekly session day', type: 'select', options: [['', 'Not set']].concat(DAYS.map((d, i) => [String(i), d])) },
     { name: 'start', label: 'Start time', type: 'time' },
-    { name: 'end', label: 'End time', type: 'time' }
+    { name: 'end', label: 'End time', type: 'time' },
+    { name: 'notes', label: 'Private notes (never shown to the student)', type: 'textarea', full: true, placeholder: 'Background, grades, goals...' }
   ];
 
   function editStudent(s) {
@@ -726,14 +776,14 @@
       if (isNew) {
         const subjects = subjectNames.map(name => ({ id: uid(), name, now: '', next: '' }));
         const groups = subjects.flatMap(x => defaultGroups(x.id));
-        const ns = { id: uid(), shareId: uid(), name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched,
+        const ns = { id: uid(), shareId: uid(), name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched, notes: out.notes,
           subjects, groups, topics: [], sessions: [], assignments: [], scores: [], checkins: [] };
         state.students.push(ns);
         state.currentId = ns.id;
         view = 'tracker';
         toast(out.name + ' added. Now add their topics.');
       } else {
-        Object.assign(s, { name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched });
+        Object.assign(s, { name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched, notes: out.notes });
       }
     }, isNew ? null : () => delStudent(s));
   }
@@ -905,6 +955,7 @@
       if (!file) return;
       file.text().then(txt => {
         const data = JSON.parse(txt);
+        if (data && data.type === 'tutor-dashboard-update') { applyUpdate(data); return; }
         if (!data || !Array.isArray(data.students)) throw new Error('bad');
         if (!confirm('Replace the data on this device with this backup (' + data.students.length + ' student' + (data.students.length === 1 ? '' : 's') + ')?')) return;
         state = migrate(data); persist(); view = 'tracker'; render(); toast('Backup imported.');
