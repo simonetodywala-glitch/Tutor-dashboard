@@ -5,6 +5,12 @@ A tutoring dashboard in plain HTML, CSS and JavaScript. No backend, no logins. D
 - `index.html`: tutor dashboard (topics, session log, parent updates, next-session planner, practice, scores, progress, student links)
 - `student.html`: student dashboard, opened from the link the tutor shares
 
+## Subjects and practice
+
+- Each student can have any number of subjects (Math, Science, Spanish...), each with its own class, groups and topics. Add one with **+ Add subject** on the student's card.
+- Built-in randomized drills cover math fluency (fractions, negatives, exponents, integers).
+- For any topic, add your own practice questions under **Edit / notes**, one per line as `question | answer`. Students practice them as flashcards.
+
 ## Running it
 
 - **On one device:** open `index.html` in any browser.

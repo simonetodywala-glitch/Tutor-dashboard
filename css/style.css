@@ -134,6 +134,8 @@ input[type="checkbox"] { width: 20px; height: 20px; margin: 0; accent-color: var
 .btn.small { padding: 5px 10px; min-height: 32px; font-size: .825rem; }
 .btn.link { border: 0; background: none; padding: 4px 6px; min-height: 0; color: var(--accent-ink); }
 .btn.block { width: 100%; }
+.chip { border-radius: 999px; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
 
 /* Status */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }

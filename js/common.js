@@ -10,8 +10,8 @@
   const STATUS = Object.fromEntries(STATUSES.map(s => [s.key, s]));
 
   const GROUP_KINDS = {
-    school: 'Pairs with school now',
-    fluency: 'Quick fluency (5-10 min)',
+    school: 'Matches class now',
+    fluency: 'Quick review (5-10 min)',
     break: 'Bigger blocks for school breaks',
     other: 'Other'
   };
@@ -98,15 +98,16 @@
   /* Planner: rank topics by shakiness, time since last worked, and school match. */
   function planTopics(student, opts) {
     opts = opts || {};
-    const kindOf = {};
-    student.groups.forEach(g => { kindOf[g.id] = g.kind; });
+    const kindOf = {}, subjOf = {};
+    student.groups.forEach(g => { kindOf[g.id] = g.kind; subjOf[g.id] = g.subjectId; });
     const latestConf = {};
     (student.checkins || []).forEach(c => {
       if (!c.topicId || !c.confidence) return;
       if (!latestConf[c.topicId] || latestConf[c.topicId].date <= c.date) latestConf[c.topicId] = c;
     });
 
-    return student.topics.map(t => {
+    const topics = opts.subjectId ? student.topics.filter(t => subjOf[t.groupId] === opts.subjectId) : student.topics;
+    return topics.map(t => {
       const reasons = [];
       let score = 0;
       if (t.status === 'shaky') { score += 3; reasons.push('Shaky'); }
@@ -122,7 +123,7 @@
       }
 
       const kind = kindOf[t.groupId];
-      if (kind === 'school') { score += 2; reasons.push('Matches school now'); }
+      if (kind === 'school') { score += 2; reasons.push('Matches class now'); }
       if (kind === 'fluency') { score += 0.5; }
       if (kind === 'break') {
         if (opts.breakMode) { score += 2; reasons.push('Good for the break'); }
@@ -140,7 +141,7 @@
     const ranked = planTopics(student, opts);
     const main = ranked.find(r => r.kind !== 'fluency' && r.topic.status !== 'solid') ||
       ranked.find(r => r.kind !== 'fluency') || ranked[0];
-    const warm = ranked.find(r => r.kind === 'fluency' && r !== main);
+    const warm = ranked.find(r => r.kind === 'fluency' && r !== main) || null;
     return { ranked, main, warm };
   }
 

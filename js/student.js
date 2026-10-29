@@ -29,6 +29,7 @@
     store = TD.load(key) || { data: null, log: [], sentAt: null };
     if (incoming && (!store.data || incoming.made >= (store.data.made || ''))) store.data = incoming;
     if (!store.data) { renderMissing(m); return; }
+    normalize(store.data);
     TD.save(key, store);
     TD.save('td-student-last', sid);
     document.title = store.data.name + '\'s Practice';
@@ -41,9 +42,20 @@
       '<p class="muted">Ask your tutor to send your practice link again, then open it on this device.</p></div>';
   }
 
+  // Links made before subjects existed have a single rec/warm and no subjects.
+  function normalize(d) {
+    d.subjects = d.subjects || [];
+    if (!d.recs) d.recs = d.rec ? [{ id: d.rec.id, warm: d.warm || null }] : [];
+    d.topics.forEach(t => { t.c = t.c || []; t.d = t.d || []; });
+  }
+
   function persist() { TD.save(key, store); }
   const D = () => store.data;
   const topic = id => D().topics.find(t => t.id === id);
+  function subjectOf(t) {
+    const g = D().groups.find(x => x.id === t.g);
+    return g && D().subjects.find(x => x.id === g.sub);
+  }
 
   /* ---------- Render ---------- */
 
@@ -92,17 +104,20 @@
   function nextCard() {
     const d = D();
     let h = '<div class="card"><h2>What to practice next</h2>';
-    const rec = d.rec && topic(d.rec.id);
-    if (rec) {
-      h += '<div class="topic" style="border-color:var(--accent)"><div class="small muted">Recommended for you</div>' +
+    const multi = d.subjects.length > 1;
+    d.recs.forEach(r => {
+      const rec = topic(r.id);
+      if (!rec) return;
+      const sub = subjectOf(rec);
+      h += '<div class="topic" style="border-color:var(--accent)"><div class="small muted">Recommended ' + (multi && sub ? 'in ' + esc(sub.name) : 'for you') + '</div>' +
         '<div class="topic-name">' + esc(rec.name) + '</div>' + (rec.details ? '<div class="small muted">' + esc(rec.details) + '</div>' : '') +
-        '<div style="margin:8px 0">' + bar(rec.s) + '</div>' + drillButtons(rec) + '</div>';
-    }
-    const warm = d.warm && topic(d.warm);
-    if (warm && warm !== rec) {
-      h += '<div class="topic"><div class="small muted">Quick warm-up (5-10 min)</div><div class="topic-name">' + esc(warm.name) + '</div>' +
-        '<div style="margin:8px 0">' + bar(warm.s) + '</div>' + drillButtons(warm) + '</div>';
-    }
+        '<div style="margin:8px 0">' + bar(rec.s) + '</div>' + practiceButtons(rec) + '</div>';
+      const warm = r.warm && topic(r.warm);
+      if (warm && warm !== rec) {
+        h += '<div class="topic"><div class="small muted">Quick warm-up (5-10 min)' + (multi && sub ? ' · ' + esc(sub.name) : '') + '</div><div class="topic-name">' + esc(warm.name) + '</div>' +
+          '<div style="margin:8px 0">' + bar(warm.s) + '</div>' + practiceButtons(warm) + '</div>';
+      }
+    });
     const doneIds = new Set(store.log.filter(e => e.kind === 'assignment').map(e => e.assignmentId));
     const todo = d.assignments.filter(a => !doneIds.has(a.id));
     const done = d.assignments.filter(a => doneIds.has(a.id));
@@ -118,31 +133,53 @@
     return h + '</div>';
   }
 
-  function drillButtons(t) {
-    if (!t.d || !t.d.length) return '';
-    return '<div class="row">' + t.d.map(k => '<button class="btn small primary" data-act="startDrill" data-drill="' + k + '" data-topic="' + t.id + '">Start ' + esc(DRILLS[k].name.toLowerCase()) + ' drill</button>').join('') + '</div>';
+  function practiceButtons(t) {
+    const btns = t.d.map(k => '<button class="btn small primary" data-act="startDrill" data-drill="' + k + '" data-topic="' + t.id + '">Start ' + esc(DRILLS[k].name.toLowerCase()) + ' drill</button>')
+      .concat(t.c.length ? ['<button class="btn small primary" data-act="startCards" data-topic="' + t.id + '">Practice questions (' + t.c.length + ')</button>'] : []);
+    return btns.length ? '<div class="row">' + btns.join('') + '</div>' : '';
   }
 
   function drillsCard() {
     const d = D();
-    const recDrills = new Set([].concat(...[d.rec && topic(d.rec.id), d.warm && topic(d.warm)].filter(Boolean).map(t => t.d || [])));
-    return '<div class="card"><h2>Practice drills</h2><p class="small muted">' + ROUND + ' quick problems with instant feedback.</p><div class="drill-grid">' +
-      Object.keys(DRILLS).map(k => {
-        const best = store.log.filter(e => e.drill === k).reduce((m, e) => Math.max(m, e.correct || 0), 0);
-        return '<button class="drill-btn' + (recDrills.has(k) ? ' rec' : '') + '" data-act="startDrill" data-drill="' + k + '"><b>' + esc(DRILLS[k].name) + '</b>' +
-          '<span>' + esc(DRILLS[k].blurb) + '</span>' + (best ? '<span style="display:block">Best: ' + best + '/' + ROUND + '</span>' : '') + '</button>';
-      }).join('') + '</div></div>';
+    const recTopics = d.recs.flatMap(r => [topic(r.id), r.warm && topic(r.warm)]).filter(Boolean);
+    const recDrills = new Set(recTopics.flatMap(t => t.d));
+    const hasDrills = d.topics.some(t => t.d.length);
+    const sets = d.topics.filter(t => t.c.length);
+    if (!hasDrills && !sets.length) return '';
+    let h = '<div class="card"><h2>Practice</h2>';
+    if (sets.length) {
+      h += '<p class="small muted">Questions from your tutor. Think of your answer, then check it.</p><div class="drill-grid" style="margin-bottom:14px">' +
+        sets.map(t => {
+          const sub = subjectOf(t);
+          return '<button class="drill-btn' + (recTopics.includes(t) ? ' rec' : '') + '" data-act="startCards" data-topic="' + t.id + '"><b>' + esc(t.name) + '</b>' +
+            '<span>' + (sub && d.subjects.length > 1 ? esc(sub.name) + ' · ' : '') + t.c.length + ' question' + (t.c.length === 1 ? '' : 's') + '</span></button>';
+        }).join('') + '</div>';
+    }
+    if (hasDrills) {
+      h += '<p class="small muted">Math drills: ' + ROUND + ' quick problems with instant feedback.</p><div class="drill-grid">' +
+        Object.keys(DRILLS).map(k => {
+          const best = store.log.filter(e => e.drill === k).reduce((m, e) => Math.max(m, e.correct || 0), 0);
+          return '<button class="drill-btn' + (recDrills.has(k) ? ' rec' : '') + '" data-act="startDrill" data-drill="' + k + '"><b>' + esc(DRILLS[k].name) + '</b>' +
+            '<span>' + esc(DRILLS[k].blurb) + '</span>' + (best ? '<span style="display:block">Best: ' + best + '/' + ROUND + '</span>' : '') + '</button>';
+        }).join('') + '</div>';
+    }
+    return h + '</div>';
   }
 
   function progressCard() {
     const d = D();
     const solid = d.topics.filter(t => t.s === 'solid').length;
     let h = '<div class="card"><div class="card-head"><h2>My progress</h2><span class="small muted">' + solid + ' of ' + d.topics.length + ' solid</span></div>';
-    d.groups.forEach(g => {
-      const ts = d.topics.filter(t => t.g === g.id);
-      if (!ts.length) return;
-      h += '<div class="small muted" style="margin:10px 0 4px">' + esc(g.name) + '</div>';
-      ts.forEach(t => { h += '<div style="margin-bottom:10px"><div class="small" style="font-weight:600">' + esc(t.name) + '</div>' + bar(t.s) + '</div>'; });
+    const multi = d.subjects.length > 1;
+    (d.subjects.length ? d.subjects : [null]).forEach(sub => {
+      const gs = d.groups.filter(g => !sub || g.sub === sub.id);
+      if (multi && gs.some(g => d.topics.some(t => t.g === g.id))) h += '<h3 style="margin:16px 0 0">' + esc(sub.name) + '</h3>';
+      gs.forEach(g => {
+        const ts = d.topics.filter(t => t.g === g.id);
+        if (!ts.length) return;
+        h += '<div class="small muted" style="margin:10px 0 4px">' + esc(g.name) + '</div>';
+        ts.forEach(t => { h += '<div style="margin-bottom:10px"><div class="small" style="font-weight:600">' + esc(t.name) + '</div>' + bar(t.s) + '</div>'; });
+      });
     });
     return h + '<p class="small muted" style="margin:6px 0 0">"Building" means you are in the middle of learning it. That is right where learning happens.</p></div>';
   }
@@ -181,7 +218,7 @@
     if (!topicId) {
       const d = D();
       const match = d.topics.filter(t => (t.d || []).includes(k));
-      const pref = match.find(t => d.rec && t.id === d.rec.id) || match.find(t => t.id === d.warm) || match[0];
+      const pref = match.find(t => d.recs.some(r => r.id === t.id || r.warm === t.id)) || match[0];
       topicId = pref ? pref.id : null;
     }
     drill = { key: k, topicId, n: 0, correct: 0, q: Drills.make(k), answered: false };
@@ -189,15 +226,41 @@
     window.scrollTo(0, 0);
   }
 
+  function startCards(topicId) {
+    const t = topic(topicId);
+    const cards = t.c.slice().sort(() => Math.random() - 0.5).slice(0, ROUND);
+    drill = { mode: 'cards', topicId, cards, n: 0, correct: 0, shown: false };
+    renderDrill();
+    window.scrollTo(0, 0);
+  }
+
+  function renderDone(total) {
+    const c = drill.correct, r = c / total;
+    const msg = c === total ? 'Perfect round!' : r >= 0.8 ? 'Great work!' : r >= 0.5 ? 'Solid effort. Each round gets easier.' : 'Thanks for sticking with it. Every question you try builds the skill.';
+    $view.innerHTML = '<div class="card"><h2>' + esc(msg) + '</h2><div class="question">' + c + ' / ' + total + '</div>' +
+      '<div class="row"><button class="btn primary grow" data-act="again">Another round</button><button class="btn grow" data-act="finish">Done</button></div></div>';
+  }
+
+  function renderCards() {
+    const total = drill.cards.length;
+    if (drill.n >= total) { renderDone(total); return; }
+    const c = drill.cards[drill.n];
+    const t = topic(drill.topicId);
+    $view.innerHTML = '<div class="card"><div class="card-head"><h2>' + esc(t ? t.name : 'Practice') + '</h2><span class="small muted">' + (drill.n + 1) + ' of ' + total + ' · ' + drill.correct + ' got it</span></div>' +
+      '<div class="pbar" style="margin-bottom:6px"><span style="width:' + (drill.n / total * 100) + '%"></span></div>' +
+      '<div class="question" style="font-size:1.25rem;white-space:pre-wrap">' + esc(c.q) + '</div>' +
+      (drill.shown
+        ? '<div class="flag good" style="text-align:center;font-size:1.05rem;margin-bottom:12px;white-space:pre-wrap"><b>' + esc(c.a) + '</b></div>' +
+          '<p class="small muted" style="text-align:center">Did you get it?</p><div class="row"><button class="btn primary grow" data-act="cardResult" data-ok="1">I got it</button>' +
+          '<button class="btn grow" data-act="cardResult" data-ok="0">Not yet</button></div>'
+        : '<button class="btn primary block" data-act="reveal">Show answer</button><p class="small muted" style="text-align:center;margin-top:6px">Think of your answer first, then check.</p>') +
+      '<button class="btn link small" data-act="quit" style="margin-top:6px">Stop</button></div>';
+  }
+
   function renderDrill() {
+    if (drill.mode === 'cards') { renderCards(); return; }
     const k = drill.key;
-    if (drill.n >= ROUND) {
-      const c = drill.correct;
-      const msg = c === ROUND ? 'Perfect round!' : c >= 8 ? 'Great work!' : c >= 5 ? 'Solid effort. Each round gets easier.' : 'Thanks for sticking with it. Every problem you try builds the skill.';
-      $view.innerHTML = '<div class="card"><h2>' + esc(msg) + '</h2><div class="question">' + c + ' / ' + ROUND + '</div>' +
-        '<div class="row"><button class="btn primary grow" data-act="again">Another round</button><button class="btn grow" data-act="finish">Done</button></div></div>';
-      return;
-    }
+    if (drill.n >= ROUND) { renderDone(ROUND); return; }
     const q = drill.q;
     $view.innerHTML = '<div class="card"><div class="card-head"><h2>' + esc(DRILLS[k].name) + '</h2><span class="small muted">' + (drill.n + 1) + ' of ' + ROUND + ' · ' + drill.correct + ' right</span></div>' +
       '<div class="pbar" style="margin-bottom:6px"><span style="width:' + (drill.n / ROUND * 100) + '%"></span></div>' +
@@ -235,7 +298,9 @@
   function pickOne(a) { return a[Math.floor(Math.random() * a.length)]; }
 
   function logDrill() {
-    const entry = { id: uid(), at: Date.now(), date: today(), kind: 'drill', drill: drill.key, topicId: drill.topicId, correct: drill.correct, total: ROUND };
+    const cards = drill.mode === 'cards';
+    const entry = { id: uid(), at: Date.now(), date: today(), kind: cards ? 'cards' : 'drill', topicId: drill.topicId, correct: drill.correct, total: cards ? drill.cards.length : ROUND };
+    if (!cards) entry.drill = drill.key;
     store.log.push(entry);
     persist();
     const t = drill.topicId && topic(drill.topicId);
@@ -255,7 +320,15 @@
 
   const actions = {
     startDrill: el => startDrill(el.dataset.drill, el.dataset.topic),
-    again: () => startDrill(drill.key, drill.topicId),
+    again: () => drill.mode === 'cards' ? startCards(drill.topicId) : startDrill(drill.key, drill.topicId),
+    startCards: el => startCards(el.dataset.topic),
+    reveal: () => { drill.shown = true; renderDrill(); },
+    cardResult: el => {
+      if (el.dataset.ok === '1') drill.correct++;
+      drill.n++; drill.shown = false;
+      if (drill.n >= drill.cards.length) logDrill();
+      renderDrill();
+    },
     finish: () => { drill = null; render(); const c = document.getElementById('confCard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'center' }); },
     quit: () => { drill = null; render(); },
     didIt: el => {

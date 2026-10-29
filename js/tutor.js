@@ -17,24 +17,25 @@
   };
   const CONF_WORDS = ['', 'Not yet', 'A little', 'Getting there', 'Pretty good', 'Very confident'];
 
-  let state = TD.load(KEY) || seed();
+  let state = migrate(TD.load(KEY)) || seed();
   let view = 'tracker';
   let breakMode = false;
   let lastLoggedId = null;
+  let subjectFilter = 'all';
 
   /* ---------- Data ---------- */
 
   function seed() {
     const d = today();
-    const gA = { id: uid(), name: 'Group A', kind: 'school' };
-    const gB = { id: uid(), name: 'Group B', kind: 'fluency' };
-    const gC = { id: uid(), name: 'Group C', kind: 'break' };
+    const math = { id: uid(), name: 'Math', now: 'Geometry', next: 'Algebra 2' };
+    const [gA, gB, gC] = defaultGroups(math.id);
     const t = (g, name, details) => ({
       id: uid(), groupId: g.id, name, details, status: 'none', lastWorked: null, notes: '',
-      drills: guessDrills(name), history: [{ date: d, status: 'none' }]
+      drills: guessDrills(name), cards: [], history: [{ date: d, status: 'none' }]
     });
     const noah = {
-      id: uid(), shareId: uid(), name: 'Noah', grade: '', subject: 'Geometry', nextYear: 'Algebra 2', pronoun: 'he',
+      id: uid(), shareId: uid(), name: 'Noah', grade: '', pronoun: 'he',
+      subjects: [math],
       schedule: { day: 3, start: '17:30', end: '18:30' },
       groups: [gA, gB, gC],
       topics: [
@@ -51,10 +52,72 @@
     return { v: 1, currentId: noah.id, students: [noah] };
   }
 
+  function defaultGroups(subjectId) {
+    return [
+      { id: uid(), subjectId, name: 'Group A', kind: 'school' },
+      { id: uid(), subjectId, name: 'Group B', kind: 'fluency' },
+      { id: uid(), subjectId, name: 'Group C', kind: 'break' }
+    ];
+  }
+
+  // Older saves had one class per student; move it into the subjects list.
+  function migrate(data) {
+    if (!data || !Array.isArray(data.students)) return null;
+    data.students.forEach(s => {
+      if (!s.subjects) {
+        s.subjects = [{ id: uid(), name: 'Math', now: s.subject || '', next: s.nextYear || '' }];
+        delete s.subject; delete s.nextYear;
+      }
+      const first = s.subjects[0] && s.subjects[0].id;
+      s.groups.forEach(g => { if (!s.subjects.some(x => x.id === g.subjectId)) g.subjectId = first; });
+      s.topics.forEach(t => { t.cards = t.cards || []; t.drills = t.drills || []; });
+      s.scores.forEach(x => { if (!x.subjectId) x.subjectId = first; });
+    });
+    return data;
+  }
+
   function persist() { TD.save(KEY, state); }
   function cur() { return state.students.find(s => s.id === state.currentId) || state.students[0] || null; }
   function topicById(s, id) { return s.topics.find(t => t.id === id); }
   function groupById(s, id) { return s.groups.find(g => g.id === id); }
+  function subjectById(s, id) { return s.subjects.find(x => x.id === id); }
+  function groupsOf(s, subjectId) { return s.groups.filter(g => g.subjectId === subjectId); }
+  function orderedGroups(s) {
+    return s.subjects.flatMap(x => groupsOf(s, x.id)).concat(s.groups.filter(g => !subjectById(s, g.subjectId)));
+  }
+  function groupLabel(s, g) {
+    const sub = subjectById(s, g.subjectId);
+    return s.subjects.length > 1 && sub ? sub.name + ' · ' + g.name : g.name;
+  }
+  function shownSubjects(s) {
+    const f = subjectFilter !== 'all' && subjectById(s, subjectFilter);
+    return f ? [f] : s.subjects;
+  }
+  function subjectLine(x) {
+    return [x.now ? esc(x.now) + ' now' : null, x.next ? esc(x.next) + ' next year' : null].filter(Boolean).join(' · ');
+  }
+  function subjectChips(s) {
+    if (s.subjects.length < 2) return '';
+    return '<div class="row" style="margin-bottom:12px">' + [['all', 'All subjects']].concat(s.subjects.map(x => [x.id, x.name])).map(([id, n]) =>
+      '<button class="btn small chip" data-act="filter" data-id="' + id + '" aria-pressed="' + (subjectFilter === id) + '">' + esc(n) + '</button>').join('') + '</div>';
+  }
+  function topicOptions(s) {
+    return s.subjects.map(x => {
+      const opts = s.topics.filter(t => groupsOf(s, x.id).some(g => g.id === t.groupId))
+        .map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('');
+      return opts ? (s.subjects.length > 1 ? '<optgroup label="' + esc(x.name) + '">' + opts + '</optgroup>' : opts) : '';
+    }).join('');
+  }
+  // Built-in drills are math only, so only guess them for math-like subjects.
+  function autoDrills(s, groupId, name) {
+    const g = groupById(s, groupId);
+    const sub = g && subjectById(s, g.subjectId);
+    return sub && /math|algebra|geometry|calc|trig|arith|stat/i.test(sub.name + ' ' + (sub.now || '')) ? guessDrills(name) : [];
+  }
+  function parseCards(text) {
+    return text.split('\n').map(l => l.split('|')).filter(p => p.length >= 2 && p[0].trim() && p.slice(1).join('|').trim())
+      .map(p => ({ q: p[0].trim(), a: p.slice(1).join('|').trim() }));
+  }
 
   function setStatus(topic, status, date) {
     topic.status = status;
@@ -112,6 +175,7 @@
       '<option value="' + st.id + '"' + (s && st.id === s.id ? ' selected' : '') + '>' + esc(st.name) + '</option>').join('');
     $picker.classList.toggle('hidden', !state.students.length);
     if (!s && view !== 'backup') view = 'roster';
+    if (s && subjectFilter !== 'all' && !subjectById(s, subjectFilter)) subjectFilter = 'all';
 
     const inStudent = !['roster', 'backup'].includes(view);
     $tabs.innerHTML = inStudent ? TABS.map(([k, label]) =>
@@ -128,12 +192,13 @@
 
   function studentHeader(s) {
     const ns = nextSession(s.schedule);
-    const bits = [s.grade ? 'Grade ' + esc(s.grade) : null, s.subject ? 'In ' + esc(s.subject) + ' now' : null,
-      s.nextYear ? esc(s.nextYear) + ' next year' : null].filter(Boolean);
-    return '<div class="card"><div class="card-head"><div><h2>' + esc(s.name) + '</h2>' +
-      '<div class="small muted">' + bits.join(' · ') + '</div>' +
-      '<div class="small muted">' + esc(sessionText(s.schedule)) + (ns ? ' · Next: ' + esc(ns.label) : '') + '</div></div>' +
-      '<button class="btn small" data-act="editStudent" data-id="' + s.id + '">Edit</button></div></div>';
+    let h = '<div class="card"><div class="card-head"><div><h2>' + esc(s.name) + '</h2>' +
+      '<div class="small muted">' + [s.grade ? 'Grade ' + esc(s.grade) : null, esc(sessionText(s.schedule)), ns ? 'Next: ' + esc(ns.label) : null].filter(Boolean).join(' · ') + '</div></div>' +
+      '<button class="btn small" data-act="editStudent" data-id="' + s.id + '">Edit</button></div>';
+    h += '<div class="row">' + s.subjects.map(x => '<button class="btn small" data-act="editSubject" data-id="' + x.id + '" title="Edit subject"><b>' + esc(x.name) + '</b>' +
+      (subjectLine(x) ? '<span class="muted" style="font-weight:400">' + subjectLine(x) + '</span>' : '') + '</button>').join('') +
+      '<button class="btn small link" data-act="addSubject">+ Add subject</button></div>';
+    return h + '</div>';
   }
 
   function seg(status, act, id) {
@@ -144,18 +209,22 @@
   /* ---------- Topics tab ---------- */
 
   function rTracker(s) {
-    let h = studentHeader(s);
-    s.groups.forEach(g => {
-      const topics = s.topics.filter(t => t.groupId === g.id);
-      h += '<section class="card group"><div class="group-head"><h3>' + esc(g.name) + '</h3>' +
-        '<span class="small muted grow">' + esc(GROUP_KINDS[g.kind] || '') + '</span>' +
-        '<button class="btn small link" data-act="editGroup" data-id="' + g.id + '">Edit group</button></div>';
-      h += topics.length ? topics.map(t => topicCard(s, t)).join('') : '<div class="empty">No topics in this group yet.</div>';
-      h += '<button class="btn small" data-act="addTopic" data-group="' + g.id + '">+ Add topic</button></section>';
+    let h = studentHeader(s) + subjectChips(s);
+    if (!s.subjects.length) h += '<div class="card empty">Add a subject to start tracking topics.</div>';
+    shownSubjects(s).forEach(sub => {
+      if (s.subjects.length > 1) h += '<h2 style="margin:20px 0 10px">' + esc(sub.name) + '</h2>';
+      groupsOf(s, sub.id).forEach(g => {
+        const topics = s.topics.filter(t => t.groupId === g.id);
+        h += '<section class="card group"><div class="group-head"><h3>' + esc(g.name) + '</h3>' +
+          '<span class="small muted grow">' + esc(GROUP_KINDS[g.kind] || '') + '</span>' +
+          '<button class="btn small link" data-act="editGroup" data-id="' + g.id + '">Edit group</button></div>';
+        h += topics.length ? topics.map(t => topicCard(s, t)).join('') : '<div class="empty">No topics in this group yet.</div>';
+        h += '<button class="btn small" data-act="addTopic" data-group="' + g.id + '">+ Add topic</button></section>';
+      });
+      h += '<button class="btn" data-act="addGroup" data-subject="' + sub.id + '" style="margin-bottom:16px">+ Add ' + esc(sub.name) + ' group</button>';
     });
     const orphan = s.topics.filter(t => !groupById(s, t.groupId));
-    if (orphan.length) h += '<section class="card"><h3>Ungrouped</h3>' + orphan.map(t => topicCard(s, t)).join('') + '</section>';
-    h += '<button class="btn" data-act="addGroup">+ Add group</button>';
+    if (orphan.length && subjectFilter === 'all') h += '<section class="card"><h3>Ungrouped</h3>' + orphan.map(t => topicCard(s, t)).join('') + '</section>';
     return h;
   }
 
@@ -165,7 +234,8 @@
     const meta = [
       t.lastWorked ? 'Last worked ' + fmtDate(t.lastWorked) + (ds > 0 ? ' (' + ds + 'd ago)' : ' (today)') : 'Not worked on yet',
       conf ? 'Student confidence ' + conf.confidence + '/5' : null,
-      t.drills && t.drills.length ? 'Drills: ' + t.drills.map(k => DRILLS[k].name).join(', ') : null
+      t.drills && t.drills.length ? 'Drills: ' + t.drills.map(k => DRILLS[k].name).join(', ') : null,
+      t.cards && t.cards.length ? t.cards.length + ' practice question' + (t.cards.length === 1 ? '' : 's') : null
     ].filter(Boolean).join(' · ');
     return '<div class="topic"><div class="topic-top"><div class="grow"><div class="topic-name">' + esc(t.name) + '</div>' +
       (t.details ? '<div class="small muted">' + esc(t.details) + '</div>' : '') +
@@ -182,15 +252,15 @@
     const showId = lastLoggedId && s.sessions.find(x => x.id === lastLoggedId) ? lastLoggedId : latest && latest.id;
     if (showId) h += parentCard(s, s.sessions.find(x => x.id === showId));
 
-    const plan = suggestPlan(s, { breakMode });
-    const defaultPlan = plan.main ? 'work on ' + lowerFirst(plan.main.topic.name) : '';
+    const mains = s.subjects.map(x => suggestPlan(s, { breakMode, subjectId: x.id }).main).filter(Boolean);
+    const defaultPlan = mains.length ? 'work on ' + listJoin(mains.map(m => lowerFirst(m.topic.name))) : '';
     h += '<form class="card" id="logForm"><h2>Log a session</h2>' +
       '<div class="field"><label for="logDate">Date</label><input type="date" id="logDate" value="' + today() + '" required></div>' +
       '<label>What did you cover? Tap a topic, then set its new status.</label>';
-    s.groups.forEach(g => {
+    orderedGroups(s).forEach(g => {
       const topics = s.topics.filter(t => t.groupId === g.id);
       if (!topics.length) return;
-      h += '<div class="small muted" style="margin:10px 0 4px">' + esc(g.name) + '</div>';
+      h += '<div class="small muted" style="margin:10px 0 4px">' + esc(groupLabel(s, g)) + '</div>';
       topics.forEach(t => {
         h += '<div class="topic log-row" data-topic="' + t.id + '"><div class="topic-top"><label class="row grow" style="margin:0;color:var(--text);cursor:pointer">' +
           '<input type="checkbox" class="log-check"> <span>' + esc(t.name) + '</span></label>' +
@@ -227,7 +297,7 @@
   function gapRow(s) {
     return '<div class="topic gap-row"><div class="fields">' +
       '<div class="field full"><label>New gap topic</label><input class="gap-name" placeholder="e.g. Distributing negatives"></div>' +
-      '<div class="field"><label>Group</label><select class="gap-group">' + s.groups.map(g => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('') + '</select></div>' +
+      '<div class="field"><label>Group</label><select class="gap-group">' + orderedGroups(s).map(g => '<option value="' + g.id + '">' + esc(groupLabel(s, g)) + '</option>').join('') + '</select></div>' +
       '<div class="field"><label>Status</label>' + seg('shaky', 'pickSeg') + '</div></div>' +
       '<button type="button" class="btn small link danger" data-act="removeRow">Remove</button></div>';
   }
@@ -256,7 +326,7 @@
     });
     gaps.forEach(g => {
       s.topics.push({ id: uid(), groupId: g.groupId, name: g.name, details: 'Spotted in homework ' + fmtDate(date),
-        status: g.status, lastWorked: null, notes: '', drills: guessDrills(g.name), history: [{ date, status: g.status }] });
+        status: g.status, lastWorked: null, notes: '', drills: autoDrills(s, g.groupId, g.name), cards: [], history: [{ date, status: g.status }] });
     });
     const session = {
       id: uid(), created: Date.now(), date, items, gaps: gaps.map(g => g.name),
@@ -273,22 +343,34 @@
 
   /* ---------- Next session tab ---------- */
 
+  function planItem(n, prefix, r, fallback) {
+    return '<div class="plan-item"><div class="plan-rank">' + n + '</div><div><b>' + prefix + esc(r.topic.name) + '</b> ' + statusPill(r.topic.status) +
+      '<div class="reasons">' + esc(r.reasons.join(' · ') || fallback) + '</div></div></div>';
+  }
+
   function rPlan(s) {
-    const plan = suggestPlan(s, { breakMode });
-    let h = '<div class="card"><div class="card-head"><h2>Suggested next session</h2>' +
-      '<label class="row" style="margin:0"><input type="checkbox" data-act="breakMode"' + (breakMode ? ' checked' : '') + '> School break</label></div>';
     const ns = nextSession(s.schedule);
-    if (ns) h += '<p class="small muted">' + esc(ns.label) + '</p>';
-    if (!plan.main) return h + '<div class="empty">Add some topics first.</div></div>';
-    h += '<div class="plan-item"><div class="plan-rank">1</div><div><b>Main block: ' + esc(plan.main.topic.name) + '</b> ' + statusPill(plan.main.topic.status) +
-      '<div class="reasons">' + esc(plan.main.reasons.join(' · ') || 'Next up') + '</div></div></div>';
-    if (plan.warm) h += '<div class="plan-item"><div class="plan-rank">2</div><div><b>Warm-up (5-10 min): ' + esc(plan.warm.topic.name) + '</b> ' + statusPill(plan.warm.topic.status) +
-      '<div class="reasons">' + esc(plan.warm.reasons.join(' · ') || 'Keep it fresh') + '</div></div></div>';
-    h += '</div><div class="card"><h2>All topics, by priority</h2><p class="small muted">Shakiest topics, topics not touched in a while, and topics that match school now rise to the top.' +
-      (breakMode ? ' Break mode is on, so Group C blocks are boosted.' : ' Turn on School break to boost the bigger Group C blocks.') + '</p>';
-    h += plan.ranked.map((r, i) => '<div class="plan-item"><div class="plan-rank">' + (i + 1) + '</div><div class="grow"><div class="row"><b class="grow">' + esc(r.topic.name) + '</b>' + statusPill(r.topic.status) + '</div>' +
-      '<div class="reasons">' + esc((groupById(s, r.topic.groupId) || {}).name || '') + (r.reasons.length ? ' · ' + esc(r.reasons.join(' · ')) : '') + '</div></div></div>').join('');
-    return h + '</div>';
+    let h = '<div class="card"><div class="card-head"><div><h2>Suggested next session</h2>' + (ns ? '<div class="small muted">' + esc(ns.label) + '</div>' : '') + '</div>' +
+      '<label class="row" style="margin:0"><input type="checkbox" data-act="breakMode"' + (breakMode ? ' checked' : '') + '> School break</label></div>';
+    if (!s.topics.length) return h + '<div class="empty">Add some topics first.</div></div>';
+    let n = 0;
+    s.subjects.forEach(sub => {
+      const plan = suggestPlan(s, { breakMode, subjectId: sub.id });
+      if (!plan.main) return;
+      if (s.subjects.length > 1) h += '<h3 style="margin-top:12px">' + esc(sub.name) + '</h3>';
+      h += planItem(++n, 'Main block: ', plan.main, 'Next up');
+      if (plan.warm) h += planItem(++n, 'Warm-up (5-10 min): ', plan.warm, 'Keep it fresh');
+    });
+    h += '<p class="small muted" style="margin:10px 0 0">Shakiest topics, topics not touched in a while, and topics that match class now rise to the top.' +
+      (breakMode ? ' Break mode is on, so Group C blocks are boosted.' : ' Turn on School break to boost the bigger Group C blocks.') + '</p></div>';
+    s.subjects.forEach(sub => {
+      const ranked = planTopics(s, { breakMode, subjectId: sub.id });
+      if (!ranked.length) return;
+      h += '<div class="card"><h2>' + (s.subjects.length > 1 ? esc(sub.name) + ': all topics by priority' : 'All topics, by priority') + '</h2>' +
+        ranked.map((r, i) => '<div class="plan-item"><div class="plan-rank">' + (i + 1) + '</div><div class="grow"><div class="row"><b class="grow">' + esc(r.topic.name) + '</b>' + statusPill(r.topic.status) + '</div>' +
+        '<div class="reasons">' + esc((groupById(s, r.topic.groupId) || {}).name || '') + (r.reasons.length ? ' · ' + esc(r.reasons.join(' · ')) : '') + '</div></div></div>').join('') + '</div>';
+    });
+    return h;
   }
 
   /* ---------- Practice tab ---------- */
@@ -297,7 +379,7 @@
     const open = s.assignments.filter(a => !a.done);
     const done = s.assignments.filter(a => a.done).sort((a, b) => (b.doneDate || '').localeCompare(a.doneDate || ''));
     let h = '<form class="card" id="assignForm"><h2>Assign practice</h2><div class="fields">' +
-      '<div class="field"><label for="aTopic">Topic</label><select id="aTopic">' + s.topics.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('') + '</select></div>' +
+      '<div class="field"><label for="aTopic">Topic</label><select id="aTopic">' + topicOptions(s) + '</select></div>' +
       '<div class="field"><label for="aDue">Due (optional)</label><input type="date" id="aDue"></div>' +
       '<div class="field full"><label for="aTitle">What to do</label><input id="aTitle" required placeholder="e.g. Worksheet #3, problems 1-12"></div>' +
       '<div class="field full"><label for="aLink">Link (optional)</label><input id="aLink" inputmode="url" autocapitalize="off" placeholder="https://..."></div></div>' +
@@ -318,8 +400,8 @@
         ch.slice(0, 30).map(c => {
           const t = c.topicId && topicById(s, c.topicId);
           const what = c.kind === 'drill' ? DRILLS[c.drill] ? DRILLS[c.drill].name + ' drill' : 'Drill' :
-            (c.title || (t ? t.name : 'Practice'));
-          return '<tr><td>' + fmtDate(c.date) + '</td><td>' + esc(what) + (t && c.kind === 'drill' ? '<div class="small muted">' + esc(t.name) + '</div>' : '') + '</td>' +
+            c.kind === 'cards' ? 'Practice questions' : (c.title || (t ? t.name : 'Practice'));
+          return '<tr><td>' + fmtDate(c.date) + '</td><td>' + esc(what) + (t && c.kind !== 'assignment' ? '<div class="small muted">' + esc(t.name) + '</div>' : '') + '</td>' +
             '<td>' + (c.total ? c.correct + '/' + c.total : (c.kind === 'assignment' ? 'Done' : '')) + '</td>' +
             '<td>' + (c.confidence ? c.confidence + '/5 <span class="small muted">' + CONF_WORDS[c.confidence] + '</span>' : '') + '</td></tr>';
         }).join('') + '</tbody></table>';
@@ -341,9 +423,16 @@
   function pct(x) { return x.max ? (x.score / x.max) * 100 : 0; }
   function avg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
 
+  function scoreList(s) {
+    return s.scores.filter(x => subjectFilter === 'all' || x.subjectId === subjectFilter).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
   function rScores(s) {
-    const list = s.scores.slice().sort((a, b) => a.date.localeCompare(b.date));
-    let h = '<form class="card" id="scoreForm"><h2>Add a score</h2><div class="fields">' +
+    const list = scoreList(s);
+    const multi = s.subjects.length > 1;
+    let h = subjectChips(s) + '<form class="card" id="scoreForm"><h2>Add a score</h2><div class="fields">' +
+      (multi ? '<div class="field full"><label for="sSubject">Subject</label><select id="sSubject">' + s.subjects.map(x =>
+        '<option value="' + x.id + '"' + (x.id === subjectFilter ? ' selected' : '') + '>' + esc(x.name) + '</option>').join('') + '</select></div>' : '') +
       '<div class="field"><label for="sDate">Date</label><input type="date" id="sDate" value="' + today() + '" required></div>' +
       '<div class="field"><label for="sType">Type</label><select id="sType"><option value="homework">Homework</option><option value="test">Test / quiz</option></select></div>' +
       '<div class="field full"><label for="sLabel">What was it?</label><input id="sLabel" placeholder="e.g. Unit 3 test"></div>' +
@@ -351,23 +440,28 @@
       '<div class="field"><label for="sMax">Out of</label><input id="sMax" type="number" inputmode="decimal" step="any" min="1" value="100" required></div></div>' +
       '<button class="btn primary" type="submit">Add score</button></form>';
 
-    const hw = list.filter(x => x.type === 'homework').slice(-5).map(pct);
-    const ts = list.filter(x => x.type === 'test').slice(-5).map(pct);
     h += '<div class="card"><h2>Homework vs. tests</h2>';
-    if (hw.length && ts.length) {
-      const gap = avg(hw) - avg(ts);
-      const line = 'Recent homework average ' + Math.round(avg(hw)) + '% · recent test average ' + Math.round(avg(ts)) + '%.';
-      if (gap >= 15) h += '<div class="flag"><b>Homework is strong but tests are weaker</b> (' + Math.round(gap) + ' points apart). ' + line + ' Worth practicing timed, closed-notes problems.</div>';
-      else if (gap <= -15) h += '<div class="flag"><b>Tests are higher than homework</b> (' + Math.round(-gap) + ' points apart). ' + line + ' Homework may be rushed or incomplete.</div>';
-      else h += '<div class="flag good"><b>Homework and tests line up.</b> ' + line + '</div>';
-    } else {
-      h += '<p class="small muted">Add at least one homework score and one test score to compare them.</p>';
-    }
+    shownSubjects(s).forEach(sub => {
+      const own = list.filter(x => x.subjectId === sub.id || (s.subjects.length === 1 && !subjectById(s, x.subjectId)));
+      const hw = own.filter(x => x.type === 'homework').slice(-5).map(pct);
+      const ts = own.filter(x => x.type === 'test').slice(-5).map(pct);
+      const name = multi ? esc(sub.name) + ': ' : '';
+      if (hw.length && ts.length) {
+        const gap = avg(hw) - avg(ts);
+        const line = 'Recent homework average ' + Math.round(avg(hw)) + '% · recent test average ' + Math.round(avg(ts)) + '%.';
+        if (gap >= 15) h += '<div class="flag" style="margin-bottom:8px"><b>' + name + 'Homework is strong but tests are weaker</b> (' + Math.round(gap) + ' points apart). ' + line + ' Worth practicing timed, closed-notes problems.</div>';
+        else if (gap <= -15) h += '<div class="flag" style="margin-bottom:8px"><b>' + name + 'Tests are higher than homework</b> (' + Math.round(-gap) + ' points apart). ' + line + ' Homework may be rushed or incomplete.</div>';
+        else h += '<div class="flag good" style="margin-bottom:8px"><b>' + name + 'Homework and tests line up.</b> ' + line + '</div>';
+      } else {
+        h += '<p class="small muted">' + name + 'Add at least one homework score and one test score to compare them.</p>';
+      }
+    });
+    if (multi && subjectFilter === 'all' && list.length) h += '<p class="small muted">The chart shows every subject together. Pick a subject above to see just one.</p>';
     h += list.length ? '<div class="legend" style="margin:12px 0 4px"><span><i class="sw line" style="background:var(--series-1)"></i>Homework</span><span><i class="sw line" style="background:var(--series-2)"></i>Test / quiz</span></div><div class="chart" id="scoreChart"></div>' : '';
     h += '</div>';
 
     h += '<div class="card"><h2>All scores</h2>' + (list.length ? '<table class="data"><thead><tr><th>Date</th><th>Type</th><th>What</th><th>Score</th><th></th></tr></thead><tbody>' +
-      list.slice().reverse().map(x => '<tr><td>' + fmtDate(x.date) + '</td><td>' + (x.type === 'test' ? 'Test' : 'Homework') + '</td><td>' + esc(x.label) + '</td>' +
+      list.slice().reverse().map(x => '<tr><td>' + fmtDate(x.date) + '</td><td>' + (x.type === 'test' ? 'Test' : 'Homework') + '</td><td>' + esc(x.label) + (multi && subjectById(s, x.subjectId) ? '<div class="small muted">' + esc(subjectById(s, x.subjectId).name) + '</div>' : '') + '</td>' +
         '<td>' + x.score + '/' + x.max + ' <span class="small muted">' + Math.round(pct(x)) + '%</span></td>' +
         '<td><button class="btn small link danger" data-act="delScore" data-id="' + x.id + '">Delete</button></td></tr>').join('') +
       '</tbody></table>' : '<div class="empty">No scores yet.</div>') + '</div>';
@@ -377,7 +471,7 @@
   function drawScoreChart(s) {
     const el = document.getElementById('scoreChart');
     if (!el) return;
-    const list = s.scores.slice().sort((a, b) => a.date.localeCompare(b.date));
+    const list = scoreList(s);
     const W = Math.max(300, el.clientWidth || 640), H = 240, L = 34, R = 74, T = 10, B = 26;
     const t0 = parseISO(list[0].date).getTime();
     const t1 = parseISO(list[list.length - 1].date).getTime();
@@ -427,7 +521,7 @@
 
   function rProgress(s) {
     const all = s.topics.flatMap(t => (t.history || []).map(h => h.date));
-    let h = '<div class="card"><h2>Progress week by week</h2>';
+    let h = subjectChips(s) + '<div class="card"><h2>Progress week by week</h2>';
     if (!all.length) return h + '<div class="empty">No history yet. Log a session to start the timeline.</div></div>';
     const first = weekStart(all.sort()[0]);
     const weeks = [];
@@ -439,7 +533,13 @@
     h += '<p class="small muted">Each column is a week (starting Monday). The color shows where each topic stood at the end of that week.</p>' +
       '<div class="tl-wrap"><table class="tl"><thead><tr><th class="topic-col">Topic</th>' +
       shown.map(w => '<th>' + fmtDate(w, { month: 'numeric', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>';
-    s.groups.concat([{ id: null }]).forEach(g => {
+    const rowGroups = shownSubjects(s).flatMap(sub => [{ header: sub }].concat(groupsOf(s, sub.id)));
+    if (subjectFilter === 'all') rowGroups.push({ id: null });
+    rowGroups.forEach(g => {
+      if (g.header) {
+        if (s.subjects.length > 1) h += '<tr><th class="topic-col" colspan="' + (shown.length + 1) + '" style="padding-top:10px">' + esc(g.header.name) + '</th></tr>';
+        return;
+      }
       s.topics.filter(t => g.id ? t.groupId === g.id : !groupById(s, t.groupId)).forEach(t => {
         h += '<tr><th class="topic-col" scope="row">' + esc(t.name) + '</th>';
         shown.forEach(w => {
@@ -467,16 +567,17 @@
   /* ---------- Student link tab ---------- */
 
   function studentPayload(s) {
-    const plan = suggestPlan(s, { breakMode });
+    const recs = s.subjects.map(x => suggestPlan(s, { breakMode, subjectId: x.id }))
+      .filter(p => p.main).map(p => ({ id: p.main.topic.id, warm: p.warm ? p.warm.topic.id : null }));
     const last = s.sessions.slice().sort((a, b) => b.date.localeCompare(a.date) || b.created - a.created)[0];
     return {
       v: 1, sid: s.shareId, name: s.name, made: today(), schedule: s.schedule,
-      groups: s.groups.map(g => ({ id: g.id, name: g.name, kind: g.kind })),
-      topics: s.topics.map(t => ({ id: t.id, g: t.groupId, name: t.name, details: t.details, s: t.status, d: t.drills || [] })),
+      subjects: s.subjects.map(x => ({ id: x.id, name: x.name })),
+      groups: orderedGroups(s).map(g => ({ id: g.id, sub: g.subjectId, name: g.name, kind: g.kind })),
+      topics: s.topics.map(t => ({ id: t.id, g: t.groupId, name: t.name, details: t.details, s: t.status, d: t.drills || [], c: t.cards || [] })),
       assignments: s.assignments.filter(a => !a.done).map(a => ({ id: a.id, t: a.topicId, title: a.title, link: a.link, due: a.due })),
       last: last ? { date: last.date, items: last.items.map(i => ({ id: i.topicId, name: i.name, s: i.status })) } : null,
-      rec: plan.main ? { id: plan.main.topic.id, why: plan.main.reasons } : null,
-      warm: plan.warm ? plan.warm.topic.id : null
+      recs
     };
   }
 
@@ -535,7 +636,7 @@
     h += '<ul class="list">' + state.students.map(s => {
       const solid = s.topics.filter(t => t.status === 'solid').length;
       return '<li><div class="row"><div class="grow"><b>' + esc(s.name) + '</b>' +
-        '<div class="small muted">' + [s.grade ? 'Grade ' + esc(s.grade) : null, esc(s.subject || ''), esc(sessionText(s.schedule))].filter(Boolean).join(' · ') + '</div>' +
+        '<div class="small muted">' + [s.grade ? 'Grade ' + esc(s.grade) : null, esc(s.subjects.map(x => x.name).join(', ')), esc(sessionText(s.schedule))].filter(Boolean).join(' · ') + '</div>' +
         '<div class="small muted">' + solid + ' of ' + s.topics.length + ' topics solid</div></div>' +
         '<button class="btn small" data-act="openStudent" data-id="' + s.id + '">Open</button>' +
         '<button class="btn small link" data-act="editStudent" data-id="' + s.id + '">Edit</button>' +
@@ -605,9 +706,8 @@
   const studentFields = [
     { name: 'name', label: 'First name', required: true },
     { name: 'grade', label: 'Grade', placeholder: 'e.g. 9' },
-    { name: 'subject', label: 'Math class now', placeholder: 'e.g. Geometry' },
-    { name: 'nextYear', label: 'Next year', placeholder: 'e.g. Algebra 2' },
-    { name: 'pronoun', label: 'Pronoun for parent updates', type: 'select', options: [['he', 'He'], ['she', 'She'], ['they', 'They']] },
+    { name: 'subjects', label: 'Subjects (separate with commas)', placeholder: 'e.g. Math, Science', newOnly: true },
+    { name: 'pronoun', label: "Student's pronoun (for parent updates)", type: 'select', options: [['he', 'He'], ['she', 'She'], ['they', 'They']] },
     { name: 'day', label: 'Weekly session day', type: 'select', options: [['', 'Not set']].concat(DAYS.map((d, i) => [String(i), d])) },
     { name: 'start', label: 'Start time', type: 'time' },
     { name: 'end', label: 'End time', type: 'time' }
@@ -615,24 +715,52 @@
 
   function editStudent(s) {
     const isNew = !s;
-    const v = s ? Object.assign({}, s, { day: s.schedule.day == null ? '' : String(s.schedule.day), start: s.schedule.start, end: s.schedule.end }) : { pronoun: 'they' };
-    formDialog(isNew ? 'Add student' : 'Edit ' + s.name, studentFields, v, out => {
+    const v = s ? Object.assign({}, s, { day: s.schedule.day == null ? '' : String(s.schedule.day), start: s.schedule.start, end: s.schedule.end }) : { pronoun: 'they', subjects: 'Math' };
+    const fields = isNew ? studentFields : studentFields.filter(f => !f.newOnly);
+    formDialog(isNew ? 'Add student' : 'Edit ' + s.name, fields, v, out => {
       if (!out.name) { toast('Add a first name.'); return false; }
+      const subjectNames = isNew ? out.subjects.split(',').map(x => x.trim()).filter(Boolean) : [];
+      if (isNew && !subjectNames.length) { toast('Add at least one subject.'); return false; }
       const sched = { day: out.day === '' ? null : Number(out.day), start: out.start, end: out.end };
       if (isNew) {
-        const groups = [
-          { id: uid(), name: 'Group A', kind: 'school' }, { id: uid(), name: 'Group B', kind: 'fluency' }, { id: uid(), name: 'Group C', kind: 'break' }
-        ];
-        const ns = { id: uid(), shareId: uid(), name: out.name, grade: out.grade, subject: out.subject, nextYear: out.nextYear,
-          pronoun: out.pronoun, schedule: sched, groups, topics: [], sessions: [], assignments: [], scores: [], checkins: [] };
+        const subjects = subjectNames.map(name => ({ id: uid(), name, now: '', next: '' }));
+        const groups = subjects.flatMap(x => defaultGroups(x.id));
+        const ns = { id: uid(), shareId: uid(), name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched,
+          subjects, groups, topics: [], sessions: [], assignments: [], scores: [], checkins: [] };
         state.students.push(ns);
         state.currentId = ns.id;
         view = 'tracker';
         toast(out.name + ' added. Now add their topics.');
       } else {
-        Object.assign(s, { name: out.name, grade: out.grade, subject: out.subject, nextYear: out.nextYear, pronoun: out.pronoun, schedule: sched });
+        Object.assign(s, { name: out.name, grade: out.grade, pronoun: out.pronoun, schedule: sched });
       }
     }, isNew ? null : () => delStudent(s));
+  }
+
+  function editSubject(s, sub) {
+    const isNew = !sub;
+    const fields = [
+      { name: 'name', label: 'Subject', full: true, required: true, placeholder: 'e.g. Science' },
+      { name: 'now', label: 'Class now', placeholder: 'e.g. Biology' },
+      { name: 'next', label: 'Next year', placeholder: 'e.g. Chemistry' }
+    ];
+    formDialog(isNew ? 'Add subject' : 'Edit ' + sub.name, fields, sub || {}, out => {
+      if (!out.name) { toast('Add a subject name.'); return false; }
+      if (isNew) {
+        const ns = { id: uid(), name: out.name, now: out.now, next: out.next };
+        s.subjects.push(ns);
+        s.groups.push(...defaultGroups(ns.id));
+        toast(out.name + ' added with Groups A, B and C. Rename or delete them as you like.');
+      } else Object.assign(sub, out);
+    }, isNew ? null : () => {
+      const gids = groupsOf(s, sub.id).map(g => g.id);
+      const n = s.topics.filter(t => gids.includes(t.groupId)).length;
+      if (!confirm('Delete ' + sub.name + (n ? ' and its ' + n + ' topic' + (n === 1 ? '' : 's') : '') + '?')) return false;
+      s.subjects = s.subjects.filter(x => x !== sub);
+      s.groups = s.groups.filter(g => !gids.includes(g.id));
+      s.topics = s.topics.filter(t => !gids.includes(t.groupId));
+      s.scores = s.scores.filter(x => x.subjectId !== sub.id);
+    });
   }
 
   function delStudent(s) {
@@ -648,19 +776,23 @@
     const fields = [
       { name: 'name', label: 'Topic', full: true, required: true },
       { name: 'details', label: 'Details', full: true, placeholder: 'What this covers' },
-      { name: 'groupId', label: 'Group', type: 'select', options: s.groups.map(g => [g.id, g.name]) },
+      { name: 'groupId', label: 'Group', type: 'select', options: orderedGroups(s).map(g => [g.id, groupLabel(s, g)]) },
       { name: 'lastWorked', label: 'Last worked on', type: 'date' },
       { name: 'notes', label: 'Notes (private)', type: 'textarea', full: true },
-      { name: 'drills', label: 'Built-in drills for the student', type: 'checks', full: true, options: Object.keys(DRILLS).map(k => [k, DRILLS[k].name]) }
+      { name: 'cards', label: 'Practice questions for the student, one per line: question | answer', type: 'textarea', full: true,
+        placeholder: 'What part of the cell makes energy? | Mitochondria\nWhat does DNA stand for? | Deoxyribonucleic acid' },
+      { name: 'drills', label: 'Built-in math drills', type: 'checks', full: true, options: Object.keys(DRILLS).map(k => [k, DRILLS[k].name]) }
     ];
-    const v = t ? Object.assign({}, t) : { groupId, drills: [] };
+    const v = t ? Object.assign({}, t, { cards: (t.cards || []).map(c => c.q + ' | ' + c.a).join('\n') }) : { groupId, drills: [] };
     formDialog(isNew ? 'Add topic' : 'Edit topic', fields, v, out => {
       if (!out.name) { toast('Add a topic name.'); return false; }
       if (isNew) {
         s.topics.push({ id: uid(), groupId: out.groupId, name: out.name, details: out.details, status: 'none', lastWorked: out.lastWorked || null,
-          notes: out.notes, drills: out.drills.length ? out.drills : guessDrills(out.name), history: [{ date: today(), status: 'none' }] });
+          notes: out.notes, drills: out.drills.length ? out.drills : autoDrills(s, out.groupId, out.name), cards: parseCards(out.cards),
+          history: [{ date: today(), status: 'none' }] });
       } else {
-        Object.assign(t, { name: out.name, details: out.details, groupId: out.groupId, lastWorked: out.lastWorked || null, notes: out.notes, drills: out.drills });
+        Object.assign(t, { name: out.name, details: out.details, groupId: out.groupId, lastWorked: out.lastWorked || null, notes: out.notes,
+          drills: out.drills, cards: parseCards(out.cards) });
       }
     }, isNew ? null : () => {
       if (!confirm('Delete "' + t.name + '"? Its history goes with it.')) return false;
@@ -668,15 +800,16 @@
     });
   }
 
-  function editGroup(s, g) {
+  function editGroup(s, g, subjectId) {
     const isNew = !g;
     const fields = [
       { name: 'name', label: 'Group name', full: true, required: true },
-      { name: 'kind', label: 'What it is for', type: 'select', full: true, options: Object.entries(GROUP_KINDS) }
+      { name: 'kind', label: 'What it is for', type: 'select', full: true, options: Object.entries(GROUP_KINDS) },
+      { name: 'subjectId', label: 'Subject', type: 'select', full: true, options: s.subjects.map(x => [x.id, x.name]) }
     ];
-    formDialog(isNew ? 'Add group' : 'Edit group', fields, g || { kind: 'other' }, out => {
+    formDialog(isNew ? 'Add group' : 'Edit group', fields, g || { kind: 'other', subjectId }, out => {
       if (!out.name) { toast('Add a group name.'); return false; }
-      if (isNew) s.groups.push({ id: uid(), name: out.name, kind: out.kind });
+      if (isNew) s.groups.push({ id: uid(), subjectId: out.subjectId, name: out.name, kind: out.kind });
       else Object.assign(g, out);
     }, isNew ? null : () => {
       const n = s.topics.filter(t => t.groupId === g.id).length;
@@ -698,7 +831,10 @@
     delStudent: el => delStudent(state.students.find(s => s.id === el.dataset.id)),
     addTopic: (el, s) => editTopic(s, null, el.dataset.group),
     editTopic: (el, s) => editTopic(s, topicById(s, el.dataset.id)),
-    addGroup: (el, s) => editGroup(s, null),
+    addGroup: (el, s) => editGroup(s, null, el.dataset.subject),
+    addSubject: (el, s) => editSubject(s, null),
+    editSubject: (el, s) => editSubject(s, subjectById(s, el.dataset.id)),
+    filter: el => { subjectFilter = el.dataset.id; render(); },
     editGroup: (el, s) => editGroup(s, groupById(s, el.dataset.id)),
     topicStatus: (el, s) => {
       const t = topicById(s, el.dataset.id);
@@ -770,7 +906,7 @@
         const data = JSON.parse(txt);
         if (!data || !Array.isArray(data.students)) throw new Error('bad');
         if (!confirm('Replace the data on this device with this backup (' + data.students.length + ' student' + (data.students.length === 1 ? '' : 's') + ')?')) return;
-        state = data; persist(); view = 'tracker'; render(); toast('Backup imported.');
+        state = migrate(data); persist(); view = 'tracker'; render(); toast('Backup imported.');
       }).catch(() => toast('That file is not a Tutor Dashboard backup.'));
     }
   });
@@ -799,7 +935,8 @@
       const score = parseFloat(document.getElementById('sScore').value);
       const max = parseFloat(document.getElementById('sMax').value);
       if (isNaN(score) || !(max > 0)) { toast('Enter a score and what it was out of.'); return; }
-      s.scores.push({ id: uid(), date: document.getElementById('sDate').value || today(), type: document.getElementById('sType').value,
+      const subj = document.getElementById('sSubject');
+      s.scores.push({ id: uid(), subjectId: subj ? subj.value : (s.subjects[0] || {}).id, date: document.getElementById('sDate').value || today(), type: document.getElementById('sType').value,
         label: document.getElementById('sLabel').value.trim(), score, max });
       persist(); render(); toast('Score added.');
     }
