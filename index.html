@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#2a78d6">
+  <title>Tutor Dashboard</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>Tutor Dashboard</h1>
+      <select id="studentPicker" aria-label="Choose student" style="width:auto;max-width:180px"></select>
+      <button class="btn small" data-act="goRoster">Students</button>
+      <button class="btn small" data-act="goBackup">Backup</button>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+  </header>
+
+  <main class="wrap" id="view"></main>
+
+  <dialog id="dlg"><form method="dialog" id="dlgForm"></form></dialog>
+
+  <script src="js/common.js"></script>
+  <script src="js/tutor.js"></script>
+</body>
+</html>
