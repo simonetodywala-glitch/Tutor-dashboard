@@ -9,7 +9,8 @@
     shaky: { pct: 55, label: 'Building', cls: 'shaky' },
     solid: { pct: 100, label: 'Solid', cls: 'solid' }
   };
-  const CONF = [[1, 'Not yet'], [2, 'A little'], [3, 'Getting there'], [4, 'Pretty good'], [5, 'Very confident']];
+  const CONF = [[1, 'Not yet', '😵'], [2, 'A little', '😕'], [3, 'Getting there', '🙂'], [4, 'Pretty good', '😄'], [5, 'Very confident', '🤩']];
+  const DRILL_ICONS = { fractions: '🍕', negatives: '🌡️', exponents: '🚀', integers: '🧮' };
 
   const $view = document.getElementById('view');
   let store = null;   // { data, log: [], sentAt }
@@ -33,7 +34,7 @@
     TD.save(key, store);
     TD.save('td-student-last', sid);
     document.title = store.data.name + '\'s Practice';
-    document.getElementById('title').textContent = 'Hi, ' + store.data.name + '!';
+    document.getElementById('title').textContent = 'Hi, ' + store.data.name + '! 👋';
     render();
   }
 
@@ -90,9 +91,9 @@
     const prog = solid ? 'You have ' + solid + ' topic' + (solid === 1 ? '' : 's') + ' solid' + (building ? ' and ' + building + ' building' : '') + '.'
       : building ? 'You are building ' + building + ' topic' + (building === 1 ? '' : 's') + ' right now.' : '';
     return '<div class="card hero"><h2>' + esc(msg) + '</h2>' + (prog ? '<p class="small">' + esc(prog) + '</p>' : '') +
-      '<div class="stats"><div class="stat"><b>' + st.current + '</b><span>day streak</span></div>' +
-      '<div class="stat"><b>' + st.best + '</b><span>best streak</span></div>' +
-      '<div class="stat"><b>' + st.problems + '</b><span>problems this week</span></div></div></div>';
+      '<div class="stats"><div class="stat"><span class="ico">🔥</span><b>' + st.current + '</b><span>day streak</span></div>' +
+      '<div class="stat"><span class="ico">🏆</span><b>' + st.best + '</b><span>best streak</span></div>' +
+      '<div class="stat"><span class="ico">✏️</span><b>' + st.problems + '</b><span>this week</span></div></div></div>';
   }
 
   function bar(status) {
@@ -109,12 +110,12 @@
       const rec = topic(r.id);
       if (!rec) return;
       const sub = subjectOf(rec);
-      h += '<div class="topic" style="border-color:var(--accent)"><div class="small muted">Recommended ' + (multi && sub ? 'in ' + esc(sub.name) : 'for you') + '</div>' +
+      h += '<div class="topic rec-card"><div class="rec-label">✨ Recommended ' + (multi && sub ? 'in ' + esc(sub.name) : 'for you') + '</div>' +
         '<div class="topic-name">' + esc(rec.name) + '</div>' + (rec.details ? '<div class="small muted">' + esc(rec.details) + '</div>' : '') +
         '<div style="margin:8px 0">' + bar(rec.s) + '</div>' + practiceButtons(rec) + '</div>';
       const warm = r.warm && topic(r.warm);
       if (warm && warm !== rec) {
-        h += '<div class="topic"><div class="small muted">Quick warm-up (5-10 min)' + (multi && sub ? ' · ' + esc(sub.name) : '') + '</div><div class="topic-name">' + esc(warm.name) + '</div>' +
+        h += '<div class="topic"><div class="rec-label" style="color:var(--text-2)">⚡ Quick warm-up (5-10 min)' + (multi && sub ? ' · ' + esc(sub.name) : '') + '</div><div class="topic-name">' + esc(warm.name) + '</div>' +
           '<div style="margin:8px 0">' + bar(warm.s) + '</div>' + practiceButtons(warm) + '</div>';
       }
     });
@@ -151,7 +152,7 @@
       h += '<p class="small muted">Questions from your tutor. Think of your answer, then check it.</p><div class="drill-grid" style="margin-bottom:14px">' +
         sets.map(t => {
           const sub = subjectOf(t);
-          return '<button class="drill-btn' + (recTopics.includes(t) ? ' rec' : '') + '" data-act="startCards" data-topic="' + t.id + '"><b>' + esc(t.name) + '</b>' +
+          return '<button class="drill-btn' + (recTopics.includes(t) ? ' rec' : '') + '" data-act="startCards" data-topic="' + t.id + '"><span class="ico">🧠</span><b>' + esc(t.name) + '</b>' +
             '<span>' + (sub && d.subjects.length > 1 ? esc(sub.name) + ' · ' : '') + t.c.length + ' question' + (t.c.length === 1 ? '' : 's') + '</span></button>';
         }).join('') + '</div>';
     }
@@ -159,7 +160,7 @@
       h += '<p class="small muted">Math drills: ' + ROUND + ' quick problems with instant feedback.</p><div class="drill-grid">' +
         Object.keys(DRILLS).map(k => {
           const best = store.log.filter(e => e.drill === k).reduce((m, e) => Math.max(m, e.correct || 0), 0);
-          return '<button class="drill-btn' + (recDrills.has(k) ? ' rec' : '') + '" data-act="startDrill" data-drill="' + k + '"><b>' + esc(DRILLS[k].name) + '</b>' +
+          return '<button class="drill-btn' + (recDrills.has(k) ? ' rec' : '') + '" data-act="startDrill" data-drill="' + k + '"><span class="ico">' + DRILL_ICONS[k] + '</span><b>' + esc(DRILLS[k].name) + '</b>' +
             '<span>' + esc(DRILLS[k].blurb) + '</span>' + (best ? '<span style="display:block">Best: ' + best + '/' + ROUND + '</span>' : '') + '</button>';
         }).join('') + '</div>';
     }
@@ -208,7 +209,7 @@
   function confidenceCard() {
     return '<div class="card" id="confCard" style="border-color:var(--accent)"><h2>How confident do you feel?</h2>' +
       '<p class="small muted">' + esc(pending.label) + '</p><div class="conf">' +
-      CONF.map(([v, w]) => '<button data-act="rate" data-v="' + v + '"><b>' + v + '</b>' + w + '</button>').join('') + '</div>' +
+      CONF.map(([v, w, e]) => '<button data-act="rate" data-v="' + v + '" aria-label="' + v + ' of 5, ' + w + '"><b aria-hidden="true">' + e + '</b>' + w + '</button>').join('') + '</div>' +
       '<button class="btn link small" data-act="skipRate" style="margin-top:8px">Skip</button></div>';
   }
 
@@ -237,7 +238,8 @@
   function renderDone(total) {
     const c = drill.correct, r = c / total;
     const msg = c === total ? 'Perfect round!' : r >= 0.8 ? 'Great work!' : r >= 0.5 ? 'Solid effort. Each round gets easier.' : 'Thanks for sticking with it. Every question you try builds the skill.';
-    $view.innerHTML = '<div class="card"><h2>' + esc(msg) + '</h2><div class="question">' + c + ' / ' + total + '</div>' +
+    const icon = c === total ? '🏆' : r >= 0.8 ? '🌟' : r >= 0.5 ? '💪' : '🌱';
+    $view.innerHTML = '<div class="card celebrate"><span class="big" aria-hidden="true">' + icon + '</span><h2>' + esc(msg) + '</h2><div class="question">' + c + ' / ' + total + '</div>' +
       '<div class="row"><button class="btn primary grow" data-act="again">Another round</button><button class="btn grow" data-act="finish">Done</button></div></div>';
   }
 
@@ -288,7 +290,7 @@
     const r = drill.q.check(inp.value);
     if (r === 'unsimplified') { fb.className = 'feedback no'; fb.textContent = 'Right value! Can you simplify it?'; return; }
     drill.answered = true;
-    if (r) { drill.correct++; fb.className = 'feedback ok'; fb.textContent = pickOne(['Correct!', 'Nice!', 'Yes!', 'Got it!']); }
+    if (r) { drill.correct++; fb.className = 'feedback ok'; fb.textContent = pickOne(['Correct! 🎉', 'Nice! ✨', 'Yes! 🙌', 'Got it! 💯']); }
     else { fb.className = 'feedback no'; fb.textContent = 'Not quite. The answer is ' + drill.q.answer + '.'; }
     inp.readOnly = true;
     btn.textContent = 'Next';

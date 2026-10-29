@@ -7,8 +7,8 @@
 
   const KEY = 'tutor-dashboard-v1';
   const TABS = [
-    ['tracker', 'Topics'], ['log', 'Log session'], ['plan', 'Next session'], ['practice', 'Practice'],
-    ['scores', 'Scores'], ['progress', 'Progress'], ['share', 'Student link']
+    ['tracker', '📚 Topics'], ['log', '📝 Log session'], ['plan', '🧭 Next session'], ['practice', '🎯 Practice'],
+    ['scores', '📊 Scores'], ['progress', '📈 Progress'], ['share', '🔗 Student link']
   ];
   const PRONOUNS = {
     he: { subj: 'He', be: 'is' },
@@ -93,6 +93,7 @@
     const f = subjectFilter !== 'all' && subjectById(s, subjectFilter);
     return f ? [f] : s.subjects;
   }
+  function subjVar(s, x) { return '--subj:var(--subj-' + (Math.max(0, s.subjects.indexOf(x)) % 5) + ')'; }
   function subjectLine(x) {
     return [x.now ? esc(x.now) + ' now' : null, x.next ? esc(x.next) + ' next year' : null].filter(Boolean).join(' · ');
   }
@@ -195,7 +196,7 @@
     let h = '<div class="card"><div class="card-head"><div><h2>' + esc(s.name) + '</h2>' +
       '<div class="small muted">' + [s.grade ? 'Grade ' + esc(s.grade) : null, esc(sessionText(s.schedule)), ns ? 'Next: ' + esc(ns.label) : null].filter(Boolean).join(' · ') + '</div></div>' +
       '<button class="btn small" data-act="editStudent" data-id="' + s.id + '">Edit</button></div>';
-    h += '<div class="row">' + s.subjects.map(x => '<button class="btn small" data-act="editSubject" data-id="' + x.id + '" title="Edit subject"><b>' + esc(x.name) + '</b>' +
+    h += '<div class="row">' + s.subjects.map(x => '<button class="btn small subj-btn" style="' + subjVar(s, x) + '" data-act="editSubject" data-id="' + x.id + '" title="Edit subject"><b>' + esc(x.name) + '</b>' +
       (subjectLine(x) ? '<span class="muted" style="font-weight:400">' + subjectLine(x) + '</span>' : '') + '</button>').join('') +
       '<button class="btn small link" data-act="addSubject">+ Add subject</button></div>';
     return h + '</div>';
@@ -212,11 +213,11 @@
     let h = studentHeader(s) + subjectChips(s);
     if (!s.subjects.length) h += '<div class="card empty">Add a subject to start tracking topics.</div>';
     shownSubjects(s).forEach(sub => {
-      if (s.subjects.length > 1) h += '<h2 style="margin:20px 0 10px">' + esc(sub.name) + '</h2>';
+      if (s.subjects.length > 1) h += '<h2 class="subject-title" style="' + subjVar(s, sub) + '">' + esc(sub.name) + '</h2>';
       groupsOf(s, sub.id).forEach(g => {
         const topics = s.topics.filter(t => t.groupId === g.id);
-        h += '<section class="card group"><div class="group-head"><h3>' + esc(g.name) + '</h3>' +
-          '<span class="small muted grow">' + esc(GROUP_KINDS[g.kind] || '') + '</span>' +
+        h += '<section class="card group kind-' + esc(g.kind) + '"><div class="group-head"><h3>' + esc(g.name) + '</h3>' +
+          '<span class="kind-tag">' + esc(GROUP_KINDS[g.kind] || '') + '</span><span class="grow"></span>' +
           '<button class="btn small link" data-act="editGroup" data-id="' + g.id + '">Edit group</button></div>';
         h += topics.length ? topics.map(t => topicCard(s, t)).join('') : '<div class="empty">No topics in this group yet.</div>';
         h += '<button class="btn small" data-act="addTopic" data-group="' + g.id + '">+ Add topic</button></section>';
@@ -237,7 +238,7 @@
       t.drills && t.drills.length ? 'Drills: ' + t.drills.map(k => DRILLS[k].name).join(', ') : null,
       t.cards && t.cards.length ? t.cards.length + ' practice question' + (t.cards.length === 1 ? '' : 's') : null
     ].filter(Boolean).join(' · ');
-    return '<div class="topic"><div class="topic-top"><div class="grow"><div class="topic-name">' + esc(t.name) + '</div>' +
+    return '<div class="topic st-' + t.status + '"><div class="topic-top"><div class="grow"><div class="topic-name">' + esc(t.name) + '</div>' +
       (t.details ? '<div class="small muted">' + esc(t.details) + '</div>' : '') +
       '<div class="topic-meta">' + esc(meta) + '</div></div>' + seg(t.status, 'topicStatus', t.id) + '</div>' +
       (t.notes ? '<p class="small" style="margin:8px 0 0;white-space:pre-wrap"><b>Notes:</b> ' + esc(t.notes) + '</p>' : '') +
@@ -289,7 +290,7 @@
   function parentCard(s, session) {
     return '<div class="card"><div class="card-head"><h2>Parent update</h2><span class="small muted">' +
       fmtDate(session.date, { weekday: 'short', month: 'short', day: 'numeric' }) + '</span></div>' +
-      '<textarea id="parentMsg" rows="4">' + esc(parentMessage(s, session)) + '</textarea>' +
+      '<textarea id="parentMsg" rows="6">' + esc(parentMessage(s, session)) + '</textarea>' +
       '<div class="row" style="margin-top:8px"><button class="btn primary" data-act="copyParent">Copy message</button>' +
       '<span class="small muted">You can edit it before copying.</span></div></div>';
   }
