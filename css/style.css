@@ -271,7 +271,10 @@ details > summary::-webkit-details-marker { display: none; }
 .tl-wrap { overflow-x: auto; }
 .tl { border-collapse: separate; border-spacing: 3px; font-size: .78rem; }
 .tl th { font-weight: 700; color: var(--text-3); white-space: nowrap; padding: 2px 4px; }
-.tl th.topic-col { text-align: left; color: var(--text); min-width: 140px; max-width: 200px; white-space: normal; }
+.tl th.topic-col {
+  text-align: left; color: var(--text); min-width: 120px; max-width: 200px; white-space: normal;
+  position: sticky; left: 0; z-index: 2; background: var(--surface);
+}
 .tl td { width: 34px; min-width: 34px; height: 28px; border-radius: 7px; text-align: center; font-weight: 800; font-size: .7rem; }
 .tl td.none { background: var(--surface-2); color: var(--text-3); }
 .tl td.shaky { background: var(--st-shaky); color: #2b1d00; }
@@ -281,6 +284,52 @@ details > summary::-webkit-details-marker { display: none; }
 .legend span { display: inline-flex; gap: 6px; align-items: center; }
 .sw { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
 .sw.line { height: 3px; border-radius: 2px; }
+
+/* Progress tab */
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+.tile {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 12px 14px;
+  box-shadow: var(--shadow-sm); border-top: 4px solid var(--st-none);
+}
+.tile b { display: block; font-size: 1.7rem; font-weight: 900; line-height: 1.15; }
+.tile span { font-size: .8rem; font-weight: 700; color: var(--text-2); }
+.tile.solid { border-top-color: var(--st-solid); }
+.tile.solid b { color: var(--st-solid-ink); }
+.tile.shaky { border-top-color: var(--st-shaky); }
+.tile.shaky b { color: var(--st-shaky-ink); }
+.tile.up { border-top-color: var(--accent); }
+.tile.up b { color: var(--accent-ink); }
+.tl td.cell { cursor: pointer; position: relative; transition: transform .1s, box-shadow .1s; }
+.tl td.cell:hover, .tl td.cell:focus-visible { transform: scale(1.12); box-shadow: 0 2px 8px rgba(0, 0, 0, .18); outline: none; z-index: 1; }
+.tl td.col-on { box-shadow: 0 0 0 2px var(--accent); }
+.tl td.blank.col-on { background: var(--accent-soft); box-shadow: none; }
+.tl td.on { box-shadow: 0 0 0 3px var(--text); transform: scale(1.12); }
+.tl tr.row-on th .tl-topic { color: var(--accent-ink); text-decoration: underline; }
+.tl-dot { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--surface); display: inline-block; }
+.tl-week, .tl-topic {
+  font: inherit; border: 0; background: none; color: inherit; cursor: pointer; padding: 2px 4px; border-radius: 6px; text-align: left;
+}
+.tl-week:hover, .tl-topic:hover { background: var(--accent-soft); color: var(--accent-ink); }
+.tl-week.on { background: var(--accent); color: #fff; }
+.tl-topic { font-weight: 700; }
+.tl-change {
+  width: 100%; font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px;
+}
+.tl-change-name { font-weight: 700; }
+.tl-change:hover .tl-change-name { color: var(--accent-ink); text-decoration: underline; }
+.detail { border: 2px solid var(--accent); animation: rise-in .25s ease-out; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.tline { list-style: none; margin: 0; padding: 0 0 0 18px; position: relative; }
+.tline::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+.tline li { position: relative; padding: 6px 0; }
+.tline li::before {
+  content: ""; position: absolute; left: -18px; top: 11px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--st-none); box-shadow: 0 0 0 3px var(--surface);
+}
+.tline li.shaky::before { background: var(--st-shaky); }
+.tline li.solid::before { background: var(--st-solid); }
 
 /* Score chart */
 .chart { position: relative; }

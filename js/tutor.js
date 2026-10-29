@@ -22,6 +22,8 @@
   let breakMode = false;
   let lastLoggedId = null;
   let subjectFilter = 'all';
+  let progRange = 12;
+  let progSel = null;
 
   /* ---------- Data ---------- */
 
@@ -187,6 +189,7 @@
       progress: rProgress, share: rShare, roster: rRoster, backup: rBackup }[view];
     $view.innerHTML = fn(s);
     if (view === 'scores') drawScoreChart(s);
+    if (view === 'progress') drawMastery(s);
     const active = $tabs.querySelector('[aria-selected="true"]');
     if (active) active.scrollIntoView({ block: 'nearest', inline: 'center' });
   }
@@ -526,49 +529,236 @@
 
   /* ---------- Progress tab ---------- */
 
-  function rProgress(s) {
-    const all = s.topics.flatMap(t => (t.history || []).map(h => h.date));
-    let h = subjectChips(s) + '<div class="card"><h2>Progress week by week</h2>';
-    if (!all.length) return h + '<div class="empty">No history yet. Log a session to start the timeline.</div></div>';
-    const first = weekStart(all.sort()[0]);
+  const RANK = { none: 0, shaky: 1, solid: 2 };
+  const ABBREV = { none: '–', shaky: 'S', solid: '✓' };
+
+  function weekEnd(w) { const d = parseISO(w); d.setDate(d.getDate() + 6); return toISO(d); }
+  function statusAt(t, iso) {
+    const hist = (t.history || []).filter(x => x.date <= iso);
+    return hist.length ? hist[hist.length - 1].status : null;
+  }
+  function progTopics(s) {
+    const ids = new Set(shownSubjects(s).flatMap(sub => groupsOf(s, sub.id).map(g => g.id)));
+    return s.topics.filter(t => ids.has(t.groupId) || (subjectFilter === 'all' && !groupById(s, t.groupId)));
+  }
+  function progWeeks(s) {
+    const all = progTopics(s).flatMap(t => (t.history || []).map(h => h.date)).sort();
+    if (!all.length) return [];
     const weeks = [];
-    const d = parseISO(first);
+    const d = parseISO(weekStart(all[0]));
     const end = weekStart(today());
     while (toISO(d) <= end) { weeks.push(toISO(d)); d.setDate(d.getDate() + 7); }
-    const shown = weeks.slice(-16);
-    const abbrev = { none: '–', shaky: 'S', solid: '✓' };
-    h += '<p class="small muted">Each column is a week (starting Monday). The color shows where each topic stood at the end of that week.</p>' +
+    return progRange ? weeks.slice(-progRange) : weeks;
+  }
+  function weekLabel(w) { return fmtDate(w) + '–' + fmtDate(weekEnd(w)); }
+  function inWeek(date, w) { return date >= w && date <= weekEnd(w); }
+
+  function rProgress(s) {
+    const topics = progTopics(s);
+    let h = subjectChips(s);
+    const weeks = progWeeks(s);
+    if (!weeks.length) return h + '<div class="card"><h2>Progress</h2><div class="empty">No history yet. Log a session to start the timeline.</div></div>';
+
+    // Summary tiles
+    const ago = new Date(); ago.setDate(ago.getDate() - 30);
+    const agoIso = toISO(ago);
+    const count = st => topics.filter(t => t.status === st).length;
+    const movedUp = topics.filter(t => RANK[t.status] > RANK[statusAt(t, agoIso) || 'none']).length;
+    h += '<div class="tiles">' +
+      '<div class="tile solid"><b>' + count('solid') + '</b><span>Solid</span></div>' +
+      '<div class="tile shaky"><b>' + count('shaky') + '</b><span>Shaky</span></div>' +
+      '<div class="tile none"><b>' + count('none') + '</b><span>Not started</span></div>' +
+      '<div class="tile up"><b>' + (movedUp ? '▲ ' : '') + movedUp + '</b><span>Moved up in 30 days</span></div></div>';
+
+    // Mastery chart
+    h += '<div class="card"><div class="card-head"><h2>Mastery over time</h2><div class="row">' +
+      [[4, '4 wks'], [12, '12 wks'], [0, 'All']].map(([n, l]) =>
+        '<button class="btn small chip" data-act="progRange" data-n="' + n + '" aria-pressed="' + (progRange === n) + '">' + l + '</button>').join('') + '</div></div>' +
+      '<div class="legend" style="margin:0 0 6px"><span><i class="sw" style="background:var(--st-solid)"></i>Solid</span>' +
+      '<span><i class="sw" style="background:var(--st-shaky)"></i>Shaky</span><span><i class="sw" style="background:var(--st-none)"></i>Not started</span></div>' +
+      '<div class="chart" id="masteryChart"></div><p class="small muted" style="margin:6px 0 0">Tap a week to see what happened.</p></div>';
+
+    // Grid
+    const selW = progSel && progSel.w;
+    const selT = progSel && progSel.id;
+    h += '<div class="card"><h2>Week by week</h2><p class="small muted">Where each topic stood at the end of each week. Tap a square, a week or a topic for details.</p>' +
       '<div class="tl-wrap"><table class="tl"><thead><tr><th class="topic-col">Topic</th>' +
-      shown.map(w => '<th>' + fmtDate(w, { month: 'numeric', day: 'numeric' }) + '</th>').join('') + '</tr></thead><tbody>';
+      weeks.map(w => '<th><button class="tl-week' + (w === selW ? ' on' : '') + '" data-act="progWeek" data-w="' + w + '" title="Week of ' + esc(weekLabel(w)) + '">' +
+        fmtDate(w, { month: 'numeric', day: 'numeric' }) + '</button></th>').join('') + '</tr></thead><tbody>';
     const rowGroups = shownSubjects(s).flatMap(sub => [{ header: sub }].concat(groupsOf(s, sub.id)));
     if (subjectFilter === 'all') rowGroups.push({ id: null });
     rowGroups.forEach(g => {
       if (g.header) {
-        if (s.subjects.length > 1) h += '<tr><th class="topic-col" colspan="' + (shown.length + 1) + '" style="padding-top:10px">' + esc(g.header.name) + '</th></tr>';
+        if (s.subjects.length > 1) h += '<tr><th class="topic-col" colspan="' + (weeks.length + 1) + '" style="padding-top:10px">' + esc(g.header.name) + '</th></tr>';
         return;
       }
-      s.topics.filter(t => g.id ? t.groupId === g.id : !groupById(s, t.groupId)).forEach(t => {
-        h += '<tr><th class="topic-col" scope="row">' + esc(t.name) + '</th>';
-        shown.forEach(w => {
-          const we = parseISO(w); we.setDate(we.getDate() + 6);
-          const weIso = toISO(we);
-          const hist = (t.history || []).filter(x => x.date <= weIso);
-          if (!hist.length) { h += '<td class="blank"></td>'; return; }
-          const st = hist[hist.length - 1].status;
-          h += '<td class="' + st + '" title="' + esc(t.name + ', week of ' + fmtDate(w) + ': ' + STATUS[st].label) + '">' + abbrev[st] + '</td>';
+      topics.filter(t => g.id ? t.groupId === g.id : !groupById(s, t.groupId)).forEach(t => {
+        h += '<tr class="' + (t.id === selT ? 'row-on' : '') + '"><th class="topic-col" scope="row"><button class="tl-topic" data-act="progTopic" data-id="' + t.id + '">' + esc(t.name) + '</button></th>';
+        weeks.forEach(w => {
+          const st = statusAt(t, weekEnd(w));
+          if (!st) { h += '<td class="blank' + (w === selW ? ' col-on' : '') + '"></td>'; return; }
+          const changed = (t.history || []).some((x, i, arr) => i > 0 && inWeek(x.date, w) && arr[i - 1].status !== x.status);
+          const on = progSel && progSel.kind === 'cell' && progSel.id === t.id && progSel.w === w;
+          h += '<td class="cell ' + st + (w === selW ? ' col-on' : '') + (on ? ' on' : '') + '" data-act="progCell" data-id="' + t.id + '" data-w="' + w + '" ' +
+            'title="' + esc(t.name + ', week of ' + weekLabel(w) + ': ' + STATUS[st].label) + '" tabindex="0" role="button">' + ABBREV[st] + (changed ? '<i class="tl-dot"></i>' : '') + '</td>';
         });
         h += '</tr>';
       });
     });
     h += '</tbody></table></div><div class="legend"><span><i class="sw" style="background:var(--surface-2);border:1px solid var(--border)"></i>– Not started</span>' +
-      '<span><i class="sw" style="background:var(--st-shaky)"></i>S Shaky</span><span><i class="sw" style="background:var(--st-solid)"></i>✓ Solid</span></div></div>';
+      '<span><i class="sw" style="background:var(--st-shaky)"></i>S Shaky</span><span><i class="sw" style="background:var(--st-solid)"></i>✓ Solid</span>' +
+      '<span><i class="tl-dot" style="position:static"></i>Changed that week</span></div></div>';
 
-    const changes = s.topics.flatMap(t => (t.history || []).map((x, i, arr) => ({ t, x, prev: arr[i - 1] })))
+    if (progSel) h += progDetail(s);
+
+    const changes = topics.flatMap(t => (t.history || []).map((x, i, arr) => ({ t, x, prev: arr[i - 1] })))
       .filter(c => c.prev && c.prev.status !== c.x.status).sort((a, b) => b.x.date.localeCompare(a.x.date));
     h += '<div class="card"><h2>Recent changes</h2>' + (changes.length ? '<ul class="list">' + changes.slice(0, 15).map(c =>
-      '<li class="row"><span class="small muted" style="width:56px">' + fmtDate(c.x.date) + '</span><span class="grow">' + esc(c.t.name) + '</span>' +
-      statusPill(c.prev.status) + '<span class="muted">→</span>' + statusPill(c.x.status) + '</li>').join('') + '</ul>' : '<div class="empty">No status changes yet.</div>') + '</div>';
+      '<li><button class="tl-change" data-act="progTopic" data-id="' + c.t.id + '"><span class="tl-change-name"><span class="small muted">' + fmtDate(c.x.date) + '</span> ' + esc(c.t.name) + '</span>' +
+      '<span class="row">' + statusPill(c.prev.status) + '<span class="muted">→</span>' + statusPill(c.x.status) + '</span></button></li>').join('') + '</ul>' : '<div class="empty">No status changes yet.</div>') + '</div>';
     return h;
+  }
+
+  function sessionLine(x, onlyTopic) {
+    const items = onlyTopic ? x.items.filter(i => i.topicId === onlyTopic) : x.items;
+    return '<li><div class="row"><b class="grow">Session · ' + fmtDate(x.date, { weekday: 'short', month: 'short', day: 'numeric' }) + '</b></div>' +
+      (items.length ? '<div class="row" style="margin-top:4px">' + items.map(i => '<span class="small">' + esc(i.name) + '</span> ' + statusPill(i.status)).join(' ') + '</div>' : '') +
+      (x.gaps && x.gaps.length && !onlyTopic ? '<div class="small muted">New gaps: ' + esc(x.gaps.join(', ')) + '</div>' : '') +
+      (x.note ? '<div class="small muted" style="white-space:pre-wrap;margin-top:2px">' + esc(x.note) + '</div>' : '') + '</li>';
+  }
+  function checkinLine(s, c) {
+    const t = c.topicId && topicById(s, c.topicId);
+    const what = c.kind === 'drill' ? (DRILLS[c.drill] ? DRILLS[c.drill].name + ' drill' : 'Drill') : c.kind === 'cards' ? 'Practice questions' : (c.title || 'Practice');
+    return '<li><div class="tl-change-name"><span class="small muted">' + fmtDate(c.date) + '</span> ' + esc(what) +
+      (t ? ' <span class="small muted">· ' + esc(t.name) + '</span>' : '') + '</div><div class="row" style="margin-top:4px">' +
+      (c.total ? '<span class="pill info">' + c.correct + '/' + c.total + ' right</span>' : '') +
+      (c.confidence ? '<span class="pill">Confidence ' + c.confidence + '/5</span>' : '') + '</div></li>';
+  }
+
+  function progDetail(s) {
+    const sel = progSel;
+    let h = '<div class="card detail" id="progDetail"><div class="card-head">';
+    const close = '<button class="btn small" data-act="progClose" aria-label="Close details">✕</button>';
+    const sec = (title, inner) => '<h3 style="margin-top:14px">' + title + '</h3>' + inner;
+
+    if (sel.kind === 'week') {
+      const w = sel.w;
+      const sessions = s.sessions.filter(x => inWeek(x.date, w)).sort((a, b) => a.date.localeCompare(b.date));
+      const changes = s.topics.flatMap(t => (t.history || []).map((x, i, arr) => ({ t, x, prev: arr[i - 1] })))
+        .filter(c => inWeek(c.x.date, w) && (!c.prev || c.prev.status !== c.x.status));
+      const checks = s.checkins.filter(c => inWeek(c.date, w));
+      const scores = s.scores.filter(x => inWeek(x.date, w));
+      h += '<div><div class="rec-label">Week</div><h2>' + esc(weekLabel(w)) + '</h2></div>' + close + '</div>';
+      h += sec('Sessions', sessions.length ? '<ul class="list">' + sessions.map(x => sessionLine(x)).join('') + '</ul>' : '<div class="empty">No session logged this week.</div>');
+      h += sec('Status changes', changes.length ? '<ul class="list">' + changes.map(c =>
+        '<li class="row"><span class="grow">' + esc(c.t.name) + '</span>' + (c.prev ? statusPill(c.prev.status) + '<span class="muted">→</span>' : '<span class="small muted">added</span>') + statusPill(c.x.status) + '</li>').join('') + '</ul>' : '<div class="empty">No changes this week.</div>');
+      if (checks.length) h += sec('Student practice', '<ul class="list">' + checks.map(c => checkinLine(s, c)).join('') + '</ul>');
+      if (scores.length) h += sec('Scores', '<ul class="list">' + scores.map(x => '<li class="row"><span class="grow">' + esc(x.label || (x.type === 'test' ? 'Test / quiz' : 'Homework')) + '</span><span class="pill info">' + x.score + '/' + x.max + '</span></li>').join('') + '</ul>');
+      return h + '</div>';
+    }
+
+    const t = topicById(s, sel.id);
+    if (!t) return '';
+    const g = groupById(s, t.groupId);
+    const inRange = d => sel.kind !== 'cell' || inWeek(d, sel.w);
+    const sessions = s.sessions.filter(x => x.items.some(i => i.topicId === t.id) && inRange(x.date)).sort((a, b) => b.date.localeCompare(a.date));
+    const checks = s.checkins.filter(c => c.topicId === t.id && inRange(c.date)).sort((a, b) => b.date.localeCompare(a.date));
+    const hist = (t.history || []).filter(x => inRange(x.date));
+    const label = sel.kind === 'cell' ? 'Week of ' + weekLabel(sel.w) : [g ? groupLabel(s, g) : null, t.lastWorked ? 'last worked ' + fmtDate(t.lastWorked) : 'not worked on yet'].filter(Boolean).join(' · ');
+    const st = sel.kind === 'cell' ? statusAt(t, weekEnd(sel.w)) : t.status;
+    h += '<div><div class="rec-label">' + esc(label) + '</div><h2>' + esc(t.name) + '</h2>' + statusPill(st) + '</div>' + close + '</div>';
+
+    h += sec(sel.kind === 'cell' ? 'Status that week' : 'Status timeline', hist.length ? '<ol class="tline">' + hist.slice().reverse().map(x => {
+      const allH = t.history || [];
+      const idx = allH.indexOf(x);
+      const before = allH[idx - 1];
+      const verb = !before ? 'Added as' : before.status === x.status ? 'Still' : (RANK[x.status] > RANK[before.status] ? 'Moved up to' : 'Moved to');
+      return '<li class="' + x.status + '"><span class="small muted">' + fmtDate(x.date, { month: 'short', day: 'numeric', year: 'numeric' }) + '</span><div>' + verb + ' ' + statusPill(x.status) + '</div></li>';
+    }).join('') + '</ol>' : '<div class="empty">No status changes ' + (sel.kind === 'cell' ? 'this week. It stayed ' + STATUS[st].word + '.' : 'yet.') + '</div>');
+    h += sec('Sessions', sessions.length ? '<ul class="list">' + sessions.map(x => sessionLine(x, t.id)).join('') + '</ul>' : '<div class="empty">No sessions on this topic' + (sel.kind === 'cell' ? ' this week.' : ' yet.') + '</div>');
+    if (checks.length) h += sec('Student practice', '<ul class="list">' + checks.map(c => checkinLine(s, c)).join('') + '</ul>');
+    if (sel.kind !== 'cell') {
+      const asg = s.assignments.filter(a => a.topicId === t.id);
+      if (asg.length) h += sec('Assigned practice', '<ul class="list">' + asg.map(a => '<li class="row"><span class="grow">' + esc(a.title) + '</span>' +
+        (a.done ? '<span class="pill solid"><span class="dot"></span>Done</span>' : '<span class="pill">Open</span>') + '</li>').join('') + '</ul>');
+      if (t.notes) h += sec('Notes', '<p class="small" style="white-space:pre-wrap">' + esc(t.notes) + '</p>');
+    }
+    h += '<div class="row" style="margin-top:12px">' + (sel.kind === 'cell' ? '<button class="btn small" data-act="progTopic" data-id="' + t.id + '">Full history</button>' : '') +
+      '<button class="btn small" data-act="editTopic" data-id="' + t.id + '">Edit / notes</button></div>';
+    return h + '</div>';
+  }
+
+  function drawMastery(s) {
+    const el = document.getElementById('masteryChart');
+    if (!el) return;
+    // Start the grid on the newest weeks, or on the selected week.
+    const wrap = document.querySelector('.tl-wrap');
+    const onCol = wrap && (wrap.querySelector('.tl-week.on') || wrap.querySelector('td.on'));
+    if (wrap) wrap.scrollLeft = onCol ? onCol.offsetLeft - wrap.clientWidth / 2 : wrap.scrollWidth;
+    const weeks = progWeeks(s);
+    const topics = progTopics(s);
+    const data = weeks.map(w => {
+      const c = { w, solid: 0, shaky: 0, none: 0 };
+      topics.forEach(t => { const st = statusAt(t, weekEnd(w)); if (st) c[st]++; });
+      c.total = c.solid + c.shaky + c.none;
+      return c;
+    });
+    const W = Math.max(300, el.clientWidth || 600), H = 190, L = 26, R = 8, T = 8, B = 24;
+    const max = Math.max(1, ...data.map(d => d.total));
+    const slot = (W - L - R) / data.length;
+    const bw = Math.max(6, Math.min(40, slot * 0.66));
+    const y = v => T + (1 - v / max) * (H - T - B);
+    const step = Math.max(1, Math.ceil(max / 4));
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Topics solid, shaky and not started each week"><g class="grid axis">';
+    for (let v = 0; v <= max; v += step) svg += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + '</text>';
+    let lastX = -Infinity;
+    data.forEach((d, i) => {
+      const cx = L + slot * (i + 0.5);
+      if (cx - lastX >= 44 || i === data.length - 1 && cx - lastX >= 30) { lastX = cx; svg += '<text x="' + cx + '" y="' + (H - 6) + '" text-anchor="middle">' + fmtDate(d.w, { month: 'numeric', day: 'numeric' }) + '</text>'; }
+    });
+    svg += '</g>';
+    const selW = progSel && progSel.kind === 'week' ? progSel.w : null;
+    data.forEach((d, i) => {
+      const x0 = L + slot * (i + 0.5) - bw / 2;
+      let base = d.total ? 0 : null;
+      const dim = selW && selW !== d.w ? ' opacity="0.35"' : '';
+      ['solid', 'shaky', 'none'].forEach(k => {
+        if (!d[k]) return;
+        const y1 = y(base), y2 = y(base + d[k]);
+        const hgt = Math.max(1, y1 - y2 - (base > 0 ? 2 : 0));
+        svg += '<rect x="' + x0 + '" y="' + y2 + '" width="' + bw + '" height="' + hgt + '" rx="3" fill="var(--st-' + k + ')"' + dim + '/>';
+        base += d[k];
+      });
+    });
+    data.forEach((d, i) => { svg += '<rect class="hit" data-i="' + i + '" x="' + (L + slot * i) + '" y="' + T + '" width="' + slot + '" height="' + (H - T - B) + '" fill="transparent" style="cursor:pointer"/>'; });
+    el.innerHTML = svg + '</svg><div class="tip hidden"></div>';
+    const tip = el.querySelector('.tip');
+    const svgEl = el.querySelector('svg');
+    svgEl.addEventListener('pointermove', e => {
+      const r = e.target.closest('rect.hit');
+      if (!r) { tip.classList.add('hidden'); return; }
+      const d = data[r.dataset.i];
+      const scale = svgEl.getBoundingClientRect().width / W;
+      tip.textContent = 'Week of ' + fmtDate(d.w) + ' · ' + d.solid + ' solid · ' + d.shaky + ' shaky · ' + d.none + ' not started';
+      const cx = (L + slot * (Number(r.dataset.i) + 0.5)) * scale;
+      tip.style.left = Math.min(Math.max(cx, 110), svgEl.getBoundingClientRect().width - 110) + 'px';
+      tip.style.top = (y(d.total) * scale) + 'px';
+      tip.classList.remove('hidden');
+    });
+    svgEl.addEventListener('pointerleave', () => tip.classList.add('hidden'));
+    svgEl.addEventListener('click', e => {
+      const r = e.target.closest('rect.hit');
+      if (!r) return;
+      const w = data[r.dataset.i].w;
+      selectProg(progSel && progSel.kind === 'week' && progSel.w === w ? null : { kind: 'week', w });
+    });
+  }
+
+  function selectProg(sel) {
+    progSel = sel;
+    render();
+    const d = document.getElementById('progDetail');
+    if (d) d.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   /* ---------- Student link tab ---------- */
@@ -873,7 +1063,7 @@
   /* ---------- Events ---------- */
 
   const actions = {
-    tab: el => { view = el.dataset.tab; render(); window.scrollTo(0, 0); },
+    tab: el => { view = el.dataset.tab; progSel = null; render(); window.scrollTo(0, 0); },
     goRoster: () => { view = 'roster'; render(); },
     goBackup: () => { view = 'backup'; render(); },
     openStudent: el => { state.currentId = el.dataset.id; view = 'tracker'; persist(); render(); },
@@ -885,7 +1075,12 @@
     addGroup: (el, s) => editGroup(s, null, el.dataset.subject),
     addSubject: (el, s) => editSubject(s, null),
     editSubject: (el, s) => editSubject(s, subjectById(s, el.dataset.id)),
-    filter: el => { subjectFilter = el.dataset.id; render(); },
+    filter: el => { subjectFilter = el.dataset.id; progSel = null; render(); },
+    progRange: el => { progRange = Number(el.dataset.n); render(); },
+    progWeek: el => selectProg(progSel && progSel.kind === 'week' && progSel.w === el.dataset.w ? null : { kind: 'week', w: el.dataset.w }),
+    progTopic: el => selectProg({ kind: 'topic', id: el.dataset.id }),
+    progCell: el => selectProg({ kind: 'cell', id: el.dataset.id, w: el.dataset.w }),
+    progClose: () => { progSel = null; render(); },
     editGroup: (el, s) => editGroup(s, groupById(s, el.dataset.id)),
     topicStatus: (el, s) => {
       const t = topicById(s, el.dataset.id);
@@ -963,8 +1158,14 @@
     }
   });
 
+  // Grid squares act like buttons for keyboard users.
+  document.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('td[data-act]')) { e.preventDefault(); e.target.click(); }
+  });
+
   $picker.addEventListener('change', () => {
     state.currentId = $picker.value;
+    progSel = null;
     if (['roster', 'backup'].includes(view)) view = 'tracker';
     persist(); render();
   });
@@ -998,7 +1199,7 @@
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (view === 'scores') drawScoreChart(cur()); }, 150);
+    resizeTimer = setTimeout(() => { if (view === 'scores') drawScoreChart(cur()); if (view === 'progress') drawMastery(cur()); }, 150);
   });
 
   persist();
